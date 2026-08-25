@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# PyInstaller
+build/
+dist/
+*.manifest
+# ignorujemy wszystkie .spec OPRÓCZ naszego (komentarz w osobnej linii —
+# w .gitignore '#' nie jest komentarzem inline)
+*.spec
+!pylinks_deck.spec
+
+# Testy (nie idą na GitHub — absolutne minimum)
+tests/
+
+# Logi / kopie / OS
+*.log
+*.bak
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
