@@ -78,6 +78,13 @@ class LogoSet:
         self._cache: dict[tuple[str, int], QPixmap] = {}
         self._dark: dict[str, bool] = {}
 
+    def refresh(self) -> None:
+        """Zapomina wczytane logotypy — po podmianie pliku w katalogu PyLinksWeb
+        inaczej trzymalibyśmy stary obrazek do restartu."""
+        self._paths.clear()
+        self._cache.clear()
+        self._dark.clear()
+
     def is_dark(self, platform: str) -> bool:
         """Czy logotyp wymaga jasnego podkładu (barwy zostawiamy nietknięte —
         odwracanie kolorów robiło z czerwonego SNES-a cyjanowy)."""

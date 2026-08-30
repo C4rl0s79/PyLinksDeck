@@ -53,8 +53,18 @@ python main.py --shot podglad.png 8
 | prawy klik na docku | opcje: grupy, rozmiar i kształt kafli, logotypy, dock, panel, autostart |
 | `Grupy…` | kolejność zakładek, widoczność, nazwy |
 | klik w ikonę w zasobniku | pokazuje / ukrywa dock |
+| dwuklik (efekt) | kafel rozciąga się na pełny ekran i gaśnie, panel się zwija |
 
-### Skalowanie kafli
+### Siatka i skalowanie kafli
+
+Odstęp między kaflami jest stały (8 px logicznych), a kafle dopasowują się do
+szerokości panelu: rozmiar z profilu wyznacza *liczbę kolumn*, po czym kafle
+rozciągają się tak, by wypełnić wiersz. Ctrl+kółko zmienia rozmiar preferowany,
+czyli w praktyce liczbę kolumn. Wszystkie wymiary układu są logiczne, więc
+proporcje i odstępy wyglądają tak samo przy każdej rozdzielczości i każdym
+skalowaniu ekranu.
+
+### Renderowanie kafli
 
 Kręcenie kółkiem nie pokazuje po kolei wszystkich rozmiarów, przez które
 przejeżdżasz. W trakcie skalowania panel rysuje kafel, który już ma w pamięci,
@@ -72,13 +82,11 @@ kopiuje ustawienia na resztę.
 
 **Dopasowanie okładki**:
 
-- **Automatycznie** — kafel jest zawsze wypełniony, żeby siatka była równa.
-  Okładki bywają 1:1, 0,71:1 czy 3:4, a części gier ustawiono w PyLinksWeb tryb
-  `pad` — wpisane w ramkę zostawiały pasy przy pojedynczych kaflach. Kadr, czyli
-  *która część* obrazu zostaje, nadal pochodzi z PyLinksWeb.
-- **Wypełnij kafel** — to samo, wymuszone niezależnie od grzbietu.
-- **Wpisz w całości** — wierne odwzorowanie PyLinksWeb (`fit` i `offset` z jego
-  bazy), kosztem pasów przy okładkach o innych proporcjach.
+- **Wypełnij kafel (kadruj)** — domyślne. Kafel jest zawsze pełny; o tym, która
+  część obrazu zostaje, decyduje `offset` z PyLinksWeb. Plakat wyraźnie szerszy
+  od ramki straci boki — to świadomy wybór na rzecz równej siatki.
+- **Wpisz w całości — jak PyLinksWeb** — wierne odwzorowanie jego ikon (`fit`
+  i `offset` z bazy), kosztem pasów przy okładkach o innych proporcjach.
 
 Kadr (`offset`) zawsze pochodzi z PyLinksWeb — sprawdzone porównaniem piksel po
 pikselu z jego `display_thumb_img`: przy kwadracie wynik jest identyczny.
@@ -142,6 +150,10 @@ Można też ustawić kluczem `pylinks_dir` w
 
 `Ustaw wszystko od nowa` w opcjach odtwarza profil bieżącego zestawu ekranów.
 
+`Odśwież bibliotekę` przeładowuje listę gier **wraz z grafiką** (czyści cache
+miniatur i logotypów). Gdy okładkę podmieniono bez zmiany daty pliku, użyj
+`Wyczyść cache miniatur` — nazwa w cache wychodzi wtedy taka sama.
+
 ## Warstwa pulpitu
 
 Deck rysuje wyłącznie na **ekranie głównym**. Dock i panel nie są zwykłymi
@@ -166,6 +178,16 @@ dock zawsze widoczny, także nad oknami — `Zawsze na wierzchu` w opcjach.
 uprawnień administratora. Program startuje przez `pythonw.exe`, więc przy
 logowaniu nie mruga okno konsoli. Odznaczenie kasuje wpis. Po przeniesieniu
 katalogu Deck sam aktualizuje ścieżkę przy najbliższym starcie.
+
+## Jedna instancja
+
+Deck pilnuje, żeby działała tylko jedna kopia (nazwany mutex sesji). Kolejne
+uruchomienie pokazuje dock już działającej instancji i kończy pracę — dwie kopie
+nadpisywałyby sobie profil i rysowały dock na docku.
+
+## Historia zmian
+
+Patrz [CHANGELOG.md](CHANGELOG.md). Wersja bieżąca: `deck.__version__`.
 
 ## Wymagania
 

@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from PySide6.QtCore import QPoint, Qt, QTimer
+from PySide6.QtCore import QPoint, QRect, Qt, QTimer
 from PySide6.QtGui import (QAction, QColor, QCursor, QGuiApplication, QIcon,
                            QPainter, QPixmap)
 from PySide6.QtWidgets import (QApplication, QFileDialog, QInputDialog, QMenu,
@@ -23,6 +23,7 @@ from deck import thumbs as TH
 from deck.thumbs import MAX_PX, MIN_PX, ThumbCache
 from deck.ui.dock import DockBar
 from deck.ui.groups_dialog import GroupsDialog
+from deck.ui.launch_fx import flash
 from deck.ui.panel import PanelWindow
 
 TILE_PRESETS = (64, 96, 128, 160, 192, 256, 320, 384, 512)
@@ -74,6 +75,8 @@ class DeckApp:
         self.panel.exited.connect(self._schedule_hide)
         self.panel.tile_changed.connect(self._on_tile_changed)
         self.panel.height_changed.connect(self._on_panel_resized)
+        self.panel.launched.connect(self._on_launched)
+        self._flash = None          # referencja, żeby okno efektu przeżyło
 
         self._hide_timer = QTimer()
         self._hide_timer.setSingleShot(True)
@@ -131,10 +134,21 @@ class DeckApp:
         return g.spine == "on" or (g.spine == "auto" and TH.SPINE.enabled)
 
     def reload_library(self) -> None:
+        """Przeładowuje bibliotekę **wraz z grafiką**.
+
+        Sama lista gier to za mało: kafle siedzą w cache pamięciowym pod kluczem
+        (gra, rozmiar, tryb), a znacznik pliku źródłowego jest tylko w nazwie
+        pliku na dysku. Bez wyczyszczenia pamięci podmieniona w PyLinksWeb
+        okładka pokazywałaby się dopiero po restarcie.
+        """
         self.items = library.load(self.base)
+        self.cache.clear()
+        self.logos.refresh()
+        self._apply_spine_settings()        # grzbiet mógł się włączyć lub zmienić
         if self.profile:
             self._sync_groups()
             self._refresh_panel()
+        self.dock.update()
 
     def _sync_groups(self) -> None:
         """Dostraja zakładki do tego, co faktycznie jest w bibliotece.
@@ -240,18 +254,27 @@ class DeckApp:
                              self.spine_for(g))
         self._fit_panel()
 
-    def _fit_panel(self) -> None:
-        """Panel jest tak wysoki, jak trzeba — nie wyżej niż pozwala profil."""
+    def _panel_rect(self) -> QRect:
+        """Docelowa geometria panelu: tak wysoki, jak trzeba, nie wyżej niż profil."""
         prof, scr = self.profile, self._screen()
         if prof is None or scr is None:
-            return
+            return QRect()
         ar = scr.availableGeometry()
         pw = max(320, int(ar.width() * prof.panel_width))
         top = self.dock.geometry().bottom() + 8
         limit = min(int(ar.height() * prof.panel_height),
                     ar.y() + ar.height() - top - 8)
         ph = max(160, min(limit, self.panel.content_height(pw)))
-        self.panel.setGeometry(ar.x() + (ar.width() - pw) // 2, top, pw, ph)
+        return QRect(ar.x() + (ar.width() - pw) // 2, top, pw, ph)
+
+    def _fit_panel(self) -> None:
+        rect = self._panel_rect()
+        if rect.isNull():
+            return
+        if self.panel.isVisible():
+            self.panel.reveal(rect, False)      # zmiana rozmiaru bez wysuwania
+        else:
+            self.panel._target = rect
 
     # ── zakładki i panel ──────────────────────────────────────────────────
     def _on_tab(self, gid: str) -> None:
@@ -284,8 +307,9 @@ class DeckApp:
         self._cancel_hide()
         if self.profile is None or self.profile.active() is None:
             return
-        if not self.panel.isVisible():
-            self.panel.show()
+        was_hidden = not self.panel.isVisible()
+        self.panel.reveal(self._panel_rect(), self.profile.animations)
+        if was_hidden:
             self._pin(self.panel)
 
     def _schedule_hide(self) -> None:
@@ -306,7 +330,7 @@ class DeckApp:
             return
         if self.panel.isVisible() and self.panel.geometry().contains(pos):
             return
-        self.panel.hide()
+        self.panel.dismiss(self.profile.animations if self.profile else True)
 
     # ── warstwa pulpitu ───────────────────────────────────────────────────
     def _pin(self, w) -> None:
@@ -320,6 +344,15 @@ class DeckApp:
 
     def profile_always_on_top(self) -> bool:
         return bool(self.settings.get("always_on_top", False))
+
+    def _on_launched(self, item, rect: QRect, pixmap) -> None:
+        """Kafel wystrzeliwuje na pełny ekran, panel zwija się za nim."""
+        prof = self.profile
+        if prof is not None and prof.animations:
+            scr = self._screen()
+            if scr is not None:
+                self._flash = flash(pixmap, rect, scr.geometry())
+        self.panel.dismiss(bool(prof and prof.animations))
 
     def _guard_layer(self) -> None:
         if self.profile_always_on_top():
@@ -372,11 +405,12 @@ class DeckApp:
             sizes.addAction("Ctrl + kółko w panelu").setEnabled(False)
 
             fitm = look.addMenu("Dopasowanie okładki")
-            for label, val in (("Automatycznie", "auto"),
-                               ("Wypełnij kafel (równa siatka)", "cover"),
+            for label, val in (("Rozciągnij do kafla (nic nie ucina)", "auto"),
+                               ("Wypełnij kadrując (ucina brzegi)", "cover"),
                                ("Wpisz w całości — jak PyLinksWeb", "contain")):
                 a = QAction(label, fitm, checkable=True)
-                a.setChecked(g.fit_mode == val)
+                a.setChecked(g.fit_mode == val or
+                             (val == "auto" and g.fit_mode not in ("cover", "contain")))
                 a.triggered.connect(lambda _=False, v=val: self._set_group(fit_mode=v))
                 fitm.addAction(a)
 
@@ -405,6 +439,11 @@ class DeckApp:
             a.triggered.connect(lambda _=False, v=val: self._set_scroll_speed(v))
             scroll.addAction(a)
 
+        a_anim = QAction("Animacje", m, checkable=True)
+        a_anim.setChecked(prof.animations)
+        a_anim.triggered.connect(self._toggle_animations)
+        m.addAction(a_anim)
+
         a_lbl = QAction("Podpisy pod kaflami", m, checkable=True)
         a_lbl.setChecked(prof.show_labels)
         a_lbl.triggered.connect(self._toggle_labels)
@@ -422,6 +461,7 @@ class DeckApp:
         a_start.triggered.connect(self._toggle_autostart)
         m.addAction(a_start)
         m.addAction("Katalog PyLinksWeb…", self._choose_dir)
+        m.addAction("Wyczyść cache miniatur", self._clear_thumbs)
         m.addAction("Odśwież bibliotekę", self.reload_library)
         m.addAction("Ustaw wszystko od nowa", self._reset_profile)
         info = m.addAction(f"Profil: {prof.label}")
@@ -484,6 +524,11 @@ class DeckApp:
         if self.profile:
             self.profile.scroll_speed = value
             self.panel.set_scroll_speed(value)
+            self._save()
+
+    def _toggle_animations(self, on: bool) -> None:
+        if self.profile:
+            self.profile.animations = on
             self._save()
 
     def _toggle_labels(self, on: bool) -> None:
@@ -560,6 +605,23 @@ class DeckApp:
             return
         self.profiles.pop(self.profile.sig, None)
         self._apply_profile()
+
+    def _clear_thumbs(self) -> None:
+        """Kasuje wyrenderowane kafle z dysku i buduje je od nowa.
+
+        Przydaje się, gdy okładka została podmieniona bez zmiany daty pliku —
+        wtedy nazwa w cache wychodzi taka sama i zwykłe odświeżenie nie pomaga.
+        """
+        removed = 0
+        for f in P.thumbs_dir().glob("*.png"):
+            try:
+                f.unlink()
+                removed += 1
+            except OSError:
+                pass
+        self.reload_library()
+        QMessageBox.information(None, "Cache miniatur",
+                                f"Usunięto {removed} plików. Kafle liczą się od nowa.")
 
     def _choose_dir(self) -> None:
         """Wskazanie katalogu danych PyLinksWeb (tego z config.json i LINKS)."""

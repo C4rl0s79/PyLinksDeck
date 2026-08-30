@@ -12,6 +12,9 @@ dist/
 *.spec
 !pylinks_deck.spec
 
+# ikona aplikacji jest częścią źródeł
+!deck.ico
+
 # Testy (nie idą na GitHub — absolutne minimum)
 tests/
 

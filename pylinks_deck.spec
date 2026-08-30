@@ -39,5 +39,5 @@ exe = EXE(
     runtime_tmpdir=None,
     console=False,              # GUI bez okna konsoli
     disable_windowed_traceback=False,
-    icon=None,                  # TODO: własna ikona, gdy powstanie
+    icon="deck.ico",
 )

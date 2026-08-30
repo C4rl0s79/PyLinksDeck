@@ -8,21 +8,23 @@ sufitu 256 px, który ogranicza ikony powłoki.
 
 from __future__ import annotations
 
-import os
-
 from PySide6.QtCore import (QAbstractAnimation, QAbstractListModel,
-                            QEasingCurve, QModelIndex,
+                            QEasingCurve, QModelIndex, QPoint,
                             QPropertyAnimation, QRect, QSize, Qt, QTimer,
                             Signal)
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen
+from PySide6.QtGui import (QColor, QFont, QFontMetrics, QPainter, QPen,
+                           QPixmap)
 from PySide6.QtWidgets import (QAbstractItemView, QFrame, QListView, QStyle,
                                QStyledItemDelegate)
 
+from deck import launcher
 from deck.library import Item
 from deck.thumbs import MAX_PX, MIN_PX, STEP, ThumbCache
 
 LABEL_H = 30
 PAD = 8
+GAP = 8            # stały odstęp między kaflami (piksele logiczne — skaluje się z DPI)
+SCROLLBAR_W = 14   # miejsce na pasek przewijania
 
 
 class TileModel(QAbstractListModel):
@@ -42,17 +44,19 @@ class TileModel(QAbstractListModel):
     def _fit_for(self, it: Item) -> str:
         """Sposób renderowania kafla dla tej pozycji.
 
-        W trybie automatycznym kafel jest zawsze wypełniony, bo siatka ma być
-        równa: okładki bywają 1:1, 0,71:1 czy 3:4 i wpisane w ramkę zostawiały
-        pasy przy pojedynczych grach (te, którym w PyLinksWeb ustawiono `pad`).
-        Kadr, czyli *która część* obrazu zostaje, nadal pochodzi z PyLinksWeb.
-        Wierne odwzorowanie jego ikon daje `contain`, a dla ROM-ów — grzbiet.
+        Domyślnie plakat jest rozciągany do ramki: kafel wychodzi pełny, nic
+        z plakatu nie znika i nic nie zostaje dołożone — kosztem proporcji.
+        `cover` wypełnia kadrowaniem (wycinek wg `offset` z PyLinksWeb),
+        `contain` odwzorowuje ikonę PyLinksWeb wiernie, a ROM-y mogą zamiast
+        tego dostać grzbiet platformy.
         """
         if self.spine_ok and it.is_rom:
             return "spine"
         if self.fit_mode == "contain":
             return ""              # "" = fit i offset dokładnie jak w PyLinksWeb
-        return "crop"
+        if self.fit_mode == "cover":
+            return "crop"          # wypełnia kadrując, wycinek wg offsetu
+        return "stretch"           # pełny kafel bez ucinania i bez podkładek
 
     def set_items(self, items: list[Item]) -> None:
         self.beginResetModel()
@@ -100,7 +104,8 @@ class TileDelegate(QStyledItemDelegate):
         p.setRenderHint(QPainter.Antialiasing, True)
         p.setRenderHint(QPainter.SmoothPixmapTransform, True)
         r = option.rect
-        tile = QRect(r.x() + PAD // 2, r.y() + PAD // 2, self.tile_w, self.tile_h)
+        tile = QRect(r.x() + (r.width() - self.tile_w) // 2,
+                     r.y() + PAD // 2, self.tile_w, self.tile_h)
 
         state = option.state
         if state & QStyle.State_Selected:
@@ -146,6 +151,7 @@ class TileView(QListView):
     """Siatka kafli. Ctrl+kółko skaluje płynnie, bez pokazywania kroków pośrednich."""
 
     zoom_ended = Signal()
+    launched = Signal(object, QRect, QPixmap)   # pozycja i wygląd kafla do animacji
 
     def __init__(self, cache: ThumbCache, parent=None) -> None:
         super().__init__(parent)
@@ -192,6 +198,8 @@ class TileView(QListView):
         self._scroll_target: int | None = None
         self.scroll_speed = 0.7
         self._margin = -1
+        self.pref_w = 128           # rozmiar preferowany (z profilu)
+        self.ratio = 1.5            # proporcja kafla (2:3 albo 1:1)
 
         # Kafle wracają z wątków paczkami — jedno odświeżenie na 60 ms.
         self._repaint = QTimer(self)
@@ -201,32 +209,61 @@ class TileView(QListView):
         cache.ready.connect(lambda *_: self._repaint.start())
 
     # ── rozmiar kafla ─────────────────────────────────────────────────────
-    def set_tile(self, width: int, height: int, show_labels: bool, dpr: float) -> None:
-        self.model_.tile_w, self.model_.tile_h, self.model_.dpr = width, height, dpr
-        self.delegate.tile_w, self.delegate.tile_h = width, height
+    def set_tile(self, pref_w: int, ratio: float, show_labels: bool,
+                 dpr: float) -> None:
+        """`pref_w` to rozmiar z profilu — punkt wyjścia do wyliczenia kolumn."""
+        self.pref_w = max(MIN_PX, pref_w)
+        self.ratio = ratio
+        self.model_.dpr = dpr
         self.delegate.show_labels = show_labels
-        self.setGridSize(QSize(width + PAD,
-                               height + PAD + (LABEL_H if show_labels else 0)))
-        self.setIconSize(QSize(width, height))
-        self._center_grid()
+        self._fit_columns()
         self.viewport().update()
 
-    def _center_grid(self) -> None:
-        """Wyśrodkowuje siatkę: przy dużych kaflach reszta po podziale potrafiła
-        zostawić kilkaset pikseli pustki przy jednej krawędzi."""
-        cell = self.gridSize().width()
-        if cell <= 0:
-            return
-        avail = self.width() - 14                    # zapas na pasek przewijania
-        cols = max(1, avail // cell)
-        margin = max(0, int((avail - cols * cell) / 2))
-        if margin != self._margin:
+    def metrics(self, width: int | None = None) -> tuple[int, int, int]:
+        """(kolumny, szerokość kafla, wysokość kafla) dla danej szerokości widoku.
+
+        Odstęp jest stały, a to kafel dopasowuje się do szerokości: liczba kolumn
+        wynika z rozmiaru *preferowanego* (tego z profilu, zmienianego kółkiem),
+        a potem kafle rozciągają się tak, by wypełnić wiersz co do piksela.
+        Dzięki temu układ wygląda tak samo przy każdej rozdzielczości i każdym
+        skalowaniu ekranu — wszystkie wymiary są logiczne, a fizyczne piksele
+        dokłada dopiero render (px × devicePixelRatio).
+        """
+        w = self.width() if width is None else width
+        # Qt rezerwuje odstęp przy KAŻDEJ komórce siatki, nie tylko między nimi:
+        # wiersz zajmuje cols × (kafel + odstęp). Liczenie odstępów jako (cols-1)
+        # zawyżało liczbę kolumn o jedną — brakowało kilku pikseli, Qt cofało się
+        # do mniejszej liczby kolumn i zostawiało po prawej całą szerokość kafla.
+        avail = max(MIN_PX + GAP, w - SCROLLBAR_W - 2 * GAP)
+        cols = max(1, int(avail // (self.pref_w + GAP)))
+        cell_w = max(MIN_PX + GAP, int(avail // cols))
+        tile_w = max(MIN_PX, cell_w - GAP)
+        tile_h = max(MIN_PX, int(round(tile_w * self.ratio)))
+        return cols, tile_w, tile_h
+
+    def _fit_columns(self) -> None:
+        """Przelicza rozmiar kafla pod bieżącą szerokość widoku."""
+        _, tile_w, tile_h = self.metrics()
+        labels = self.delegate.show_labels
+        self.delegate.tile_w, self.delegate.tile_h = tile_w, tile_h
+        self.model_.tile_w, self.model_.tile_h = tile_w, tile_h
+        self.setIconSize(QSize(tile_w, tile_h))
+        # szerokość komórki liczona z tego samego wzoru co kolumny
+        grid = QSize(tile_w + GAP, tile_h + GAP + (LABEL_H if labels else 0))
+        if self.gridSize() != grid:
+            self.setGridSize(grid)
+        # Reszta po podziale to najwyżej kilka pikseli — rozdzielamy ją równo na
+        # boki, żeby siatka była wyśrodkowana, a nie dosunięta do lewej.
+        cols, _, _ = self.metrics()
+        avail = max(0, self.width() - SCROLLBAR_W - 2 * GAP)
+        margin = GAP + max(0, (avail - cols * (tile_w + GAP)) // 2)
+        if self._margin != margin:
             self._margin = margin
             self.setViewportMargins(margin, 0, margin, 0)
 
     def resizeEvent(self, ev) -> None:
         super().resizeEvent(ev)
-        self._center_grid()
+        self._fit_columns()
 
     def _end_zoom(self) -> None:
         self.model_.defer = False
@@ -271,10 +308,18 @@ class TileView(QListView):
         it = self.model_.item_at(index.row())
         if it is None:
             return
-        try:
-            os.startfile(str(it.lnk))     # skrót niesie cel, argumenty i katalog
-        except OSError:
-            pass
+        # Miejsce samego obrazka (bez podpisu) w układzie ekranu — stąd startuje
+        # animacja uruchomienia.
+        cell = self.visualRect(index)
+        top_left = self.viewport().mapToGlobal(
+            cell.topLeft() + QPoint((cell.width() - self.delegate.tile_w) // 2,
+                                    PAD // 2))
+        rect = QRect(top_left, QSize(self.delegate.tile_w, self.delegate.tile_h))
+        pm = self.model_.data(index, Qt.DecorationRole)
+        self.launched.emit(it, rect, pm if pm is not None else QPixmap())
+        ok, err = launcher.launch_item(it)
+        if not ok:
+            print(f"[deck] nie udało się uruchomić {it.name}: {err}", flush=True)
 
     def selected_items(self) -> list[Item]:
         rows = self.selectionModel().selectedIndexes()

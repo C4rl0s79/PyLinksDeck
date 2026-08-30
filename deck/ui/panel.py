@@ -8,16 +8,19 @@ położenie wynikają z profilu ekranu, a jedyne, co się skaluje, to kafle.
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QColor, QFont, QPainter, QPen
+from PySide6.QtCore import (QEasingCurve, QPropertyAnimation, QRect,
+                            QSize, Qt, Signal)
+from PySide6.QtGui import QColor, QFont, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from deck.library import Item
 from deck.profiles import Group
-from deck.thumbs import ThumbCache, tile_size
-from deck.ui.tiles import LABEL_H, PAD, TileView, step_tile
+from deck.thumbs import ASPECTS, ThumbCache
+from deck.ui.tiles import GAP, LABEL_H, TileView, step_tile
 
 GRIP = 12          # wysokość strefy chwytania przy dolnej krawędzi
+OPEN_MS = 210      # rozwijanie — trochę wolniej, bo to ruch „do przodu"
+CLOSE_MS = 160     # zwijanie — szybciej, żeby nie zawadzało
 
 
 class PanelWindow(QWidget):
@@ -27,6 +30,7 @@ class PanelWindow(QWidget):
     exited = Signal()
     tile_changed = Signal(str, int)          # gid, nowa szerokość kafla
     height_changed = Signal(int)             # nowy zasięg panelu w px
+    launched = Signal(object, QRect, QPixmap)  # gra uruchomiona z kafla
 
     def __init__(self, cache: ThumbCache, parent=None) -> None:
         super().__init__(None, Qt.FramelessWindowHint | Qt.Tool
@@ -58,6 +62,14 @@ class PanelWindow(QWidget):
 
         self.view = TileView(cache, self)
         self.view.zoom_step = self._zoom_step          # skalowanie idzie do profilu
+        self.view.launched.connect(self.launched)
+
+        # Rozwijanie i zwijanie: animujemy geometrię okna, więc panel „wysuwa
+        # się" spod docka zamiast pojawiać się skokiem.
+        self._slide = QPropertyAnimation(self, b"geometry", self)
+        self._target = QRect()
+        self._closing = False
+        self._slide.finished.connect(self._on_slide_done)
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(10, 4, 10, GRIP + 6)      # miejsce na uchwyt
@@ -78,14 +90,62 @@ class PanelWindow(QWidget):
         self._apply_tile()
         self.view.scrollToTop()
 
+    # ── rozwijanie i zwijanie ─────────────────────────────────────────────
+    def reveal(self, rect: QRect, animate: bool = True) -> None:
+        """Pokazuje panel w zadanej geometrii, wysuwając go spod docka."""
+        self._target = QRect(rect)
+        self._closing = False
+        self._slide.stop()
+        if self.isVisible():
+            if animate and self.geometry() != rect:
+                self._run(rect, CLOSE_MS, QEasingCurve.OutCubic)
+            else:
+                self.setGeometry(rect)
+            return
+        if not animate:
+            self.setGeometry(rect)
+            self.show()
+            return
+        self.setGeometry(QRect(rect.x(), rect.y(), rect.width(), 2))
+        self.show()
+        self._run(rect, OPEN_MS, QEasingCurve.OutCubic)
+
+    def dismiss(self, animate: bool = True) -> None:
+        """Zwija panel z powrotem pod dock."""
+        if not self.isVisible():
+            return
+        self._slide.stop()
+        if not animate:
+            self.hide()
+            return
+        self._closing = True
+        collapsed = QRect(self.x(), self.y(), self.width(), 2)
+        self._run(collapsed, CLOSE_MS, QEasingCurve.InCubic)
+
+    def _run(self, end: QRect, ms: int, curve) -> None:
+        # Sygnał podpinamy raz w konstruktorze — o tym, czy po animacji schować
+        # okno, decyduje flaga `_closing`, nie przepinanie połączeń.
+        self._slide.setDuration(ms)
+        self._slide.setStartValue(self.geometry())
+        self._slide.setEndValue(end)
+        self._slide.setEasingCurve(curve)
+        self._slide.start()
+
+    def _on_slide_done(self) -> None:
+        if self._closing:
+            self._closing = False
+            self.hide()
+            if not self._target.isNull():        # wróć do pełnej wysokości
+                self.setGeometry(self._target)
+
     def set_scroll_speed(self, value: float) -> None:
         self.view.scroll_speed = value
 
     def _apply_tile(self) -> None:
         if self.group is None:
             return
-        w, h = tile_size(self.group.tile, self.group.aspect)
-        self.view.set_tile(w, h, self.show_labels, self.dpr)
+        ratio = ASPECTS.get(self.group.aspect, 1.5)
+        self.view.set_tile(self.group.tile, ratio, self.show_labels, self.dpr)
 
     def content_height(self, width: int) -> int:
         """Wysokość potrzebna, by pokazać całą grupę przy danej szerokości.
@@ -95,10 +155,10 @@ class PanelWindow(QWidget):
         """
         if self.group is None:
             return 260
-        w, h = tile_size(self.group.tile, self.group.aspect)
-        cell_w, cell_h = w + PAD, h + PAD + (LABEL_H if self.show_labels else 0)
-        inner = max(cell_w, width - 20 - 14)          # marginesy + pasek przewijania
-        cols = max(1, inner // cell_w)
+        # ta sama arytmetyka co układ siatki — inaczej panel byłby za wysoki
+        # albo obcinał ostatni wiersz
+        cols, _, tile_h = self.view.metrics(width - 20)
+        cell_h = tile_h + GAP + (LABEL_H if self.show_labels else 0)
         rows = max(1, -(-self.view.model_.rowCount() // cols))
         return 34 + rows * cell_h + 24                # nagłówek + siatka + margines
 

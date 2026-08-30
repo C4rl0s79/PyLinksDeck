@@ -71,6 +71,7 @@ class Profile:
     panel_height: float = 0.80     # ułamek wysokości obszaru roboczego
 
     scroll_speed: float = 0.7      # 1.0 = 40 % widoku na obrót kółka
+    animations: bool = True        # wysuwanie panelu i efekt uruchomienia gry
     show_labels: bool = True       # podpisy pod kaflami
     show_logos: bool = True        # logotypy zamiast nazw w zakładkach
     logo_style: str = "Light_Color"

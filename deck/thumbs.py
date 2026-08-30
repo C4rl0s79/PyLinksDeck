@@ -69,7 +69,7 @@ def _cache_file(key: str, w: int, h: int, src: Path | None, fit: str,
         except OSError:
             pass
     h10 = hashlib.md5(f"{src}|{stamp}|{fit}|{offset:.4f}".encode()).hexdigest()[:10]
-    return P.thumbs_dir() / f"{safe_key(key)}_{w}x{h}{fit[:1]}_{h10}.png"
+    return P.thumbs_dir() / f"{safe_key(key)}_{w}x{h}{fit[:2]}_{h10}.png"
 
 
 # ── rysowanie ──────────────────────────────────────────────────────────────
@@ -83,18 +83,13 @@ def _render_cover(src: Path, w: int, h: int, fit: str, offset: float) -> QImage 
         with Image.open(src) as im:
             im.load()
             im = im.convert("RGBA")
-            if fit == "crop":
-                sw, sh = im.size
-                want = w / h
-                if sw / sh > want:                 # źródło szersze — tniemy boki
-                    nw = int(sh * want)
-                    left = int(max(0, min(sw - nw, (sw - nw) * offset)))
-                    im = im.crop((left, 0, left + nw, sh))
-                else:                              # źródło wyższe — tniemy górę/dół
-                    nh = int(sw / want)
-                    top = int(max(0, min(sh - nh, (sh - nh) * offset)))
-                    im = im.crop((0, top, sw, top + nh))
+            if fit == "stretch":
+                # Świadomie bez zachowania proporcji: kafel ma być pełny, a nic
+                # nie może zniknąć ani zostać dołożone. Plakat o innych
+                # proporcjach niż ramka zostaje rozciągnięty albo ściśnięty.
                 im = im.resize((w, h), Image.LANCZOS)
+            elif fit in ("crop", "smart"):      # smart = stara nazwa w cache
+                im = _cover(im, w, h, offset)
             else:                                  # wpisanie w ramkę, bez obcinania
                 im.thumbnail((w, h), Image.LANCZOS)
                 canvas = Image.new("RGBA", (w, h), (0, 0, 0, 0))
@@ -105,6 +100,21 @@ def _render_cover(src: Path, w: int, h: int, fit: str, offset: float) -> QImage 
             return img.copy()                      # odczep od bufora Pythona
     except Exception:
         return None
+
+
+def _cover(im, w: int, h: int, offset: float = 0.5):
+    """Wypełnia ramkę w×h, obcinając nadmiar; offset wybiera wycinek."""
+    sw, sh = im.size
+    want = w / h
+    if sw / sh > want:
+        nw = int(sh * want)
+        left = int(max(0, min(sw - nw, (sw - nw) * offset)))
+        im = im.crop((left, 0, left + nw, sh))
+    else:
+        nh = int(sw / want)
+        top = int(max(0, min(sh - nh, (sh - nh) * offset)))
+        im = im.crop((0, top, sw, top + nh))
+    return im.resize((w, h), Image.LANCZOS)
 
 
 def _pil_to_qimage(im) -> QImage:
