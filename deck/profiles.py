@@ -1,13 +1,18 @@
-"""deck.profiles — grupy i profile per zestaw monitorów.
+"""deck.profiles — ustawienia wspólne i to, co naprawdę zależy od ekranu.
 
-Deck nie rozstawia ramek po pulpicie (to robi Fences i jego Folder Portal).
-Grupy są **zakładkami w docku**: lista grup to kolejność zakładek, a szerokość
-każdej zakładki wynika z szerokości docka podzielonej przez liczbę widocznych
-grup. Dlatego w profilu nie ma współrzędnych grup — jest kolejność.
+Podział wynika z bolesnej lekcji: profil „wszystko per zestaw monitorów" sprawiał,
+że podłączenie projektora zaczynało konfigurację od zera — inne ukryte zakładki,
+inny wygląd, inne rozmiary. Dlatego:
 
-Profil jest osobny dla każdego zestawu monitorów, rozpoznawanego po sygnaturze
-(nazwy ekranów + rozdzielczości + skalowanie). Przepięcie laptopa na projektor
-albo 4K przełącza cały wygląd — rozmiar kafli włącznie — zamiast go rozjeżdżać.
+* **wspólne** (`Settings`) są zakładki: ich kolejność, widoczność, nazwy i wygląd,
+  a także zachowanie panelu. To *ustawienia użytkownika* i nie mają powodu
+  zmieniać się z rozdzielczością;
+* **per ekran** (`ScreenLayout`) zostają wyłącznie wymiary docka i panelu, i to
+  wyrażone ułamkiem ekranu, więc nawet one przenoszą się sensownie.
+
+Rozmiar kafla jest liczbą **kolumn**, nie pikseli. Piksel na 1080p i na 4K to
+zupełnie inna część ekranu, a liczba kolumn wygląda tak samo wszędzie — to ona
+jest niezmiennikiem układu.
 """
 
 from __future__ import annotations
@@ -19,8 +24,9 @@ from typing import Iterable
 
 from deck import paths as P
 
-# 2 = układ dokowy; profile w starym formacie (ramki) są odrzucane przy wczytaniu.
-SCHEMA = 2
+SCHEMA = 3
+MIN_COLS = 1
+MAX_COLS = 24
 
 
 @dataclass
@@ -30,12 +36,12 @@ class Group:
     gid: str
     title: str
     rule: dict = field(default_factory=lambda: {"kind": "all"})
-    tile: int = 128            # szerokość kafla w px logicznych
+    cols: int = 8              # ile kafli w wierszu — niezależne od rozdzielczości
     aspect: str = "portrait"   # portrait = okładka 2:3, square = kwadrat
     hidden: bool = False
     sort: str = "name"
     logo: str = ""             # nazwa logotypu; puste = dobierz po platformie
-    fit_mode: str = "auto"     # auto | cover (wypełnij) | contain (wpisz)
+    fit_mode: str = "auto"     # auto (rozciągnij) | cover (kadruj) | contain
     spine: str = "auto"        # auto = jak PyLinksWeb, on, off
 
     def matches(self, item) -> bool:
@@ -50,51 +56,39 @@ class Group:
 
     @property
     def platform(self) -> str:
-        """Platforma grupy, jeśli grupa jest platformowa — do doboru logotypu."""
         if self.rule.get("kind") == "platform":
             return str(self.rule.get("value", ""))
         return ""
 
 
 @dataclass
-class Profile:
-    """Wygląd Decka dla jednego zestawu monitorów."""
+class ScreenLayout:
+    """Wymiary docka i panelu — jedyne, co wolno różnić się między ekranami."""
 
-    sig: str
     label: str = ""
-    groups: list[Group] = field(default_factory=list)
-
     dock_width: float = 0.86       # ułamek szerokości ekranu
-    dock_height: int = 46          # px logiczne
-    dock_offset: int = 0           # odsunięcie od górnej krawędzi
-    panel_width: float = 0.94      # ułamek szerokości ekranu
-    panel_height: float = 0.80     # ułamek wysokości obszaru roboczego
+    dock_height: int = 46          # px logiczne (skalują się z DPI)
+    dock_offset: int = 0
+    panel_width: float = 0.94
+    panel_height: float = 0.80
 
-    scroll_speed: float = 0.7      # 1.0 = 40 % widoku na obrót kółka
-    animations: bool = True        # wysuwanie panelu i efekt uruchomienia gry
-    show_labels: bool = True       # podpisy pod kaflami
-    show_logos: bool = True        # logotypy zamiast nazw w zakładkach
-    logo_style: str = "Light_Color"
-    opacity: float = 0.96
+
+@dataclass
+class Settings:
+    """Ustawienia użytkownika — te same na każdym ekranie."""
+
+    groups: list[Group] = field(default_factory=list)
     active_gid: str = ""
-    auto_hide: bool = True         # panel chowa się po zjechaniu myszą
-    screen: str = ""
+    show_labels: bool = True
+    show_logos: bool = True
+    logo_style: str = "default"
+    scroll_speed: float = 0.7
+    animations: bool = True
+    auto_hide: bool = True
+    opacity: float = 0.96
+    screens: dict[str, ScreenLayout] = field(default_factory=dict)
 
-    def to_json(self) -> dict:
-        d = asdict(self)
-        d["groups"] = [asdict(g) for g in self.groups]
-        return d
-
-    @staticmethod
-    def from_json(d: dict) -> "Profile":
-        gkeys = {f.name for f in fields(Group)}
-        pkeys = {f.name for f in fields(Profile)} - {"groups"}
-        groups = [Group(**{k: v for k, v in g.items() if k in gkeys})
-                  for g in (d.get("groups") or [])]
-        kwargs = {k: v for k, v in d.items() if k in pkeys}
-        kwargs.setdefault("sig", "")
-        return Profile(groups=groups, **kwargs)
-
+    # ── zakładki ──────────────────────────────────────────────────────────
     def visible_groups(self) -> list[Group]:
         return [g for g in self.groups if not g.hidden]
 
@@ -106,6 +100,35 @@ class Profile:
             if g.gid == self.active_gid:
                 return g
         return vis[0]
+
+    # ── wymiary bieżącego ekranu ──────────────────────────────────────────
+    def layout(self, sig: str, label: str = "") -> ScreenLayout:
+        lay = self.screens.get(sig)
+        if lay is None:
+            lay = ScreenLayout(label=label)
+            self.screens[sig] = lay
+        elif label:
+            lay.label = label
+        return lay
+
+    # ── zapis i odczyt ────────────────────────────────────────────────────
+    def to_json(self) -> dict:
+        d = asdict(self)
+        d["groups"] = [asdict(g) for g in self.groups]
+        d["screens"] = {k: asdict(v) for k, v in self.screens.items()}
+        return d
+
+    @staticmethod
+    def from_json(d: dict) -> "Settings":
+        gkeys = {f.name for f in fields(Group)}
+        lkeys = {f.name for f in fields(ScreenLayout)}
+        skeys = {f.name for f in fields(Settings)} - {"groups", "screens"}
+        groups = [Group(**{k: v for k, v in g.items() if k in gkeys})
+                  for g in (d.get("groups") or [])]
+        screens = {sig: ScreenLayout(**{k: v for k, v in lay.items() if k in lkeys})
+                   for sig, lay in (d.get("screens") or {}).items()}
+        kwargs = {k: v for k, v in d.items() if k in skeys}
+        return Settings(groups=groups, screens=screens, **kwargs)
 
 
 # ── sygnatura zestawu monitorów ────────────────────────────────────────────
@@ -122,21 +145,13 @@ def signature(screens: Iterable) -> tuple[str, str]:
     return sig, " + ".join(labels)
 
 
-def suggest_tile(screens: Iterable) -> int:
-    """Szerokość kafla proporcjonalna do ekranu: 1080p → 112, 1600p → 160, 4K → 224."""
-    heights = [s.geometry().height() for s in screens] or [1080]
-    return max(64, min(384, int(round(max(heights) * 0.104 / 16)) * 16))
+def clamp_cols(value: int) -> int:
+    return max(MIN_COLS, min(MAX_COLS, int(value)))
 
 
-def suggest_dock_height(screens: Iterable) -> int:
-    heights = [s.geometry().height() for s in screens] or [1080]
-    return max(32, min(88, int(round(max(heights) * 0.03))))
-
-
-# ── domyślny profil ────────────────────────────────────────────────────────
-def default_profile(sig: str, label: str, items, screens=()) -> Profile:
+# ── pierwsze uruchomienie ──────────────────────────────────────────────────
+def default_settings(items) -> Settings:
     """Zakładki: najpierw kolekcje z PyLinksWeb, potem platformy wg liczebności."""
-    tile = suggest_tile(screens) if screens else 128
     plats: dict[str, int] = {}
     colls: dict[str, int] = {}
     for it in items:
@@ -147,38 +162,81 @@ def default_profile(sig: str, label: str, items, screens=()) -> Profile:
     groups: list[Group] = []
     for name in sorted(colls, key=lambda c: -colls[c]):
         groups.append(Group(gid=f"coll::{name}", title=name.title(),
-                            rule={"kind": "collection", "value": name}, tile=tile))
+                            rule={"kind": "collection", "value": name}))
     for name in sorted(plats, key=lambda p: (-plats[p], p)):
         groups.append(Group(gid=f"plat::{name}", title=name,
-                            rule={"kind": "platform", "value": name}, tile=tile))
-
-    prof = Profile(sig=sig, label=label, groups=groups)
-    if screens:
-        prof.dock_height = suggest_dock_height(screens)
-    prof.active_gid = groups[0].gid if groups else ""
-    return prof
+                            rule={"kind": "platform", "value": name}))
+    s = Settings(groups=groups)
+    s.active_gid = groups[0].gid if groups else ""
+    return s
 
 
-# ── trwałość ───────────────────────────────────────────────────────────────
-def load_all() -> dict[str, Profile]:
+# ── trwałość i migracja ────────────────────────────────────────────────────
+def _from_schema2(raw: dict) -> Settings | None:
+    """Przenosi stary układ (profil per ekran) na wspólne ustawienia.
+
+    Bierzemy najbogatszy profil jako źródło zakładek — ustawienia użytkownika
+    przepadłyby, gdyby po prostu zacząć od zera. Rozmiar kafla w pikselach
+    przeliczamy na liczbę kolumn wg typowej szerokości panelu.
+    """
+    profiles = raw.get("profiles") or {}
+    if not profiles:
+        return None
+    best = max(profiles.values(), key=lambda p: len(p.get("groups") or []))
+    groups = []
+    for g in best.get("groups") or []:
+        tile = int(g.get("tile", 128) or 128)
+        groups.append(Group(
+            gid=g.get("gid", ""), title=g.get("title", ""),
+            rule=g.get("rule") or {"kind": "all"},
+            cols=clamp_cols(1900 // max(32, tile + 8)),
+            aspect=g.get("aspect", "portrait"), hidden=bool(g.get("hidden", False)),
+            sort=g.get("sort", "name"), logo=g.get("logo", ""),
+            fit_mode=g.get("fit_mode", "auto"), spine=g.get("spine", "auto"),
+        ))
+    s = Settings(
+        groups=groups, active_gid=best.get("active_gid", ""),
+        show_labels=bool(best.get("show_labels", True)),
+        show_logos=bool(best.get("show_logos", True)),
+        logo_style=best.get("logo_style", "default"),
+        scroll_speed=float(best.get("scroll_speed", 0.7)),
+        animations=bool(best.get("animations", True)),
+        auto_hide=bool(best.get("auto_hide", True)),
+        opacity=float(best.get("opacity", 0.96)),
+    )
+    for sig, prof in profiles.items():
+        s.screens[sig] = ScreenLayout(
+            label=prof.get("label", ""),
+            dock_width=float(prof.get("dock_width", 0.86)),
+            dock_height=int(prof.get("dock_height", 46)),
+            dock_offset=int(prof.get("dock_offset", 0)),
+            panel_width=float(prof.get("panel_width", 0.94)),
+            panel_height=float(prof.get("panel_height", 0.80)),
+        )
+    return s
+
+
+def load() -> Settings | None:
     try:
         raw = json.loads(P.layouts_path().read_text("utf-8"))
     except Exception:
-        return {}
-    if int(raw.get("schema", 0)) != SCHEMA:
-        return {}                       # inny układ świata — zaczynamy od nowa
-    out: dict[str, Profile] = {}
-    for sig, d in (raw.get("profiles") or {}).items():
+        return None
+    schema = int(raw.get("schema", 0))
+    if schema == SCHEMA:
         try:
-            out[sig] = Profile.from_json(d)
+            return Settings.from_json(raw.get("settings") or {})
         except Exception:
-            continue
-    return out
+            return None
+    if schema == 2:
+        try:
+            return _from_schema2(raw)
+        except Exception:
+            return None
+    return None
 
 
-def save_all(profiles: dict[str, Profile]) -> None:
-    data = {"schema": SCHEMA,
-            "profiles": {sig: p.to_json() for sig, p in profiles.items()}}
+def save(settings: Settings) -> None:
+    data = {"schema": SCHEMA, "settings": settings.to_json()}
     tmp = P.layouts_path().with_suffix(".tmp")
     try:
         tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1), "utf-8")

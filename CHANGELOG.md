@@ -3,6 +3,32 @@
 Format wg [Keep a Changelog](https://keepachangelog.com/pl/1.1.0/).
 Wersjonowanie semantyczne.
 
+## [0.5.0] — 2026-08-30
+
+### Naprawione
+- **Przepięcie na ekran o innej rozdzielczości resetowało konfigurację.** Inny
+  zestaw monitorów to inna sygnatura, a dla nieznanej sygnatury tworzyłem profil
+  **od zera** — stąd inne ukryte zakładki i inne rozmiary kafli. Zamiast chronić
+  układ, mechanizm profili go gubił.
+- **Rozmiar kafla trzymany w pikselach** nie przenosił się między ekranami:
+  200 px to 18 % szerokości ekranu 1080p i 8 % ekranu 1440p, więc ten sam zapis
+  dawał zupełnie inną siatkę.
+
+### Zmienione
+- **Ustawienia rozdzielone na wspólne i zależne od ekranu.** Zakładki — ich
+  kolejność, widoczność, nazwy i wygląd — oraz zachowanie panelu są teraz
+  **wspólne dla wszystkich ekranów**: to wybory użytkownika i nie mają powodu
+  zmieniać się z rozdzielczością. Per zestaw monitorów zostają wyłącznie wymiary
+  docka i panelu, i to zapisane ułamkiem ekranu.
+- **Rozmiar kafla wyrażony liczbą kolumn**, nie pikselami. Liczba kafli w wierszu
+  wygląda tak samo na projektorze i na 4K — to ona jest niezmiennikiem układu.
+  Ctrl+kółko zmienia liczbę kolumn (w górę = mniej kolumn, czyli większe kafle),
+  a w opcjach doszło `Kafli w wierszu`.
+- Format zapisu podniesiony do wersji 3. Stary plik jest **migrowany**, nie
+  kasowany: zakładki, ukrycia i wygląd zostają, a rozmiary w pikselach są
+  przeliczane na kolumny. Wymiary docka i panelu każdego znanego ekranu również
+  się przenoszą.
+
 ## [0.4.5] — 2026-08-30
 
 ### Naprawione

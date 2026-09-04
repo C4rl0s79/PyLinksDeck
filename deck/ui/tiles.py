@@ -198,7 +198,7 @@ class TileView(QListView):
         self._scroll_target: int | None = None
         self.scroll_speed = 0.7
         self._margin = -1
-        self.pref_w = 128           # rozmiar preferowany (z profilu)
+        self.cols = 8               # ile kafli w wierszu (z ustawień)
         self.ratio = 1.5            # proporcja kafla (2:3 albo 1:1)
 
         # Kafle wracają z wątków paczkami — jedno odświeżenie na 60 ms.
@@ -209,10 +209,10 @@ class TileView(QListView):
         cache.ready.connect(lambda *_: self._repaint.start())
 
     # ── rozmiar kafla ─────────────────────────────────────────────────────
-    def set_tile(self, pref_w: int, ratio: float, show_labels: bool,
+    def set_tile(self, cols: int, ratio: float, show_labels: bool,
                  dpr: float) -> None:
-        """`pref_w` to rozmiar z profilu — punkt wyjścia do wyliczenia kolumn."""
-        self.pref_w = max(MIN_PX, pref_w)
+        """`cols` to liczba kafli w wierszu — niezmiennik układu między ekranami."""
+        self.cols = max(1, int(cols))
         self.ratio = ratio
         self.model_.dpr = dpr
         self.delegate.show_labels = show_labels
@@ -231,11 +231,9 @@ class TileView(QListView):
         """
         w = self.width() if width is None else width
         # Qt rezerwuje odstęp przy KAŻDEJ komórce siatki, nie tylko między nimi:
-        # wiersz zajmuje cols × (kafel + odstęp). Liczenie odstępów jako (cols-1)
-        # zawyżało liczbę kolumn o jedną — brakowało kilku pikseli, Qt cofało się
-        # do mniejszej liczby kolumn i zostawiało po prawej całą szerokość kafla.
+        # wiersz zajmuje cols × (kafel + odstęp).
         avail = max(MIN_PX + GAP, w - SCROLLBAR_W - 2 * GAP)
-        cols = max(1, int(avail // (self.pref_w + GAP)))
+        cols = max(1, min(self.cols, int(avail // (MIN_PX + GAP))))
         cell_w = max(MIN_PX + GAP, int(avail // cols))
         tile_w = max(MIN_PX, cell_w - GAP)
         tile_h = max(MIN_PX, int(round(tile_w * self.ratio)))
@@ -324,11 +322,3 @@ class TileView(QListView):
     def selected_items(self) -> list[Item]:
         rows = self.selectionModel().selectedIndexes()
         return [it for it in (self.model_.item_at(i.row()) for i in rows) if it]
-
-
-def clamp_tile(px: int) -> int:
-    return max(MIN_PX, min(MAX_PX, px))
-
-
-def step_tile(px: int, step: int) -> int:
-    return clamp_tile(px + step * STEP)

@@ -139,6 +139,17 @@ w katalogach platform, a przynależność do kolekcji i tak bierzemy z `config.j
 Można też ustawić kluczem `pylinks_dir` w
 `%LOCALAPPDATA%\PyLinksDeck\settings.json` albo zmienną `PYLINKS_DIR`.
 
+## Ustawienia a ekrany
+
+Zakładki (kolejność, widoczność, nazwy, wygląd) i zachowanie panelu są **wspólne
+dla wszystkich ekranów** — przepięcie monitora nie zmienia tego, co ukryte ani
+jak wygląda siatka. Od zestawu monitorów zależą wyłącznie wymiary docka i panelu,
+zapisane ułamkiem ekranu.
+
+Rozmiar kafla to **liczba kolumn**, nie piksele: 200 px to 18 % szerokości ekranu
+1080p i 8 % ekranu 1440p, więc piksel nie przenosi się między ekranami, a liczba
+kafli w wierszu wygląda wszędzie tak samo.
+
 ## Stan aplikacji
 
 `%LOCALAPPDATA%\PyLinksDeck\`:

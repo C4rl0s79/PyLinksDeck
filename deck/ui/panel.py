@@ -14,9 +14,9 @@ from PySide6.QtGui import QColor, QFont, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from deck.library import Item
-from deck.profiles import Group
+from deck.profiles import Group, clamp_cols
 from deck.thumbs import ASPECTS, ThumbCache
-from deck.ui.tiles import GAP, LABEL_H, TileView, step_tile
+from deck.ui.tiles import GAP, LABEL_H, TileView
 
 GRIP = 12          # wysokość strefy chwytania przy dolnej krawędzi
 OPEN_MS = 210      # rozwijanie — trochę wolniej, bo to ruch „do przodu"
@@ -28,7 +28,7 @@ class PanelWindow(QWidget):
 
     entered = Signal()
     exited = Signal()
-    tile_changed = Signal(str, int)          # gid, nowa szerokość kafla
+    cols_changed = Signal(str, int)          # gid, nowa liczba kolumn
     height_changed = Signal(int)             # nowy zasięg panelu w px
     launched = Signal(object, QRect, QPixmap)  # gra uruchomiona z kafla
 
@@ -145,7 +145,7 @@ class PanelWindow(QWidget):
         if self.group is None:
             return
         ratio = ASPECTS.get(self.group.aspect, 1.5)
-        self.view.set_tile(self.group.tile, ratio, self.show_labels, self.dpr)
+        self.view.set_tile(self.group.cols, ratio, self.show_labels, self.dpr)
 
     def content_height(self, width: int) -> int:
         """Wysokość potrzebna, by pokazać całą grupę przy danej szerokości.
@@ -163,11 +163,12 @@ class PanelWindow(QWidget):
         return 34 + rows * cell_h + 24                # nagłówek + siatka + margines
 
     def _zoom_step(self, step: int) -> None:
+        """Kółko w górę = mniej kolumn, czyli większe kafle."""
         if self.group is None:
             return
-        self.group.tile = step_tile(self.group.tile, step)
+        self.group.cols = clamp_cols(self.group.cols - step)
         self._apply_tile()
-        self.tile_changed.emit(self.group.gid, self.group.tile)
+        self.cols_changed.emit(self.group.gid, self.group.cols)
 
     # ── tło i uchwyt ──────────────────────────────────────────────────────
     def paintEvent(self, ev) -> None:
