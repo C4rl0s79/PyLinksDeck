@@ -21,10 +21,51 @@ from deck import launcher
 from deck.library import Item
 from deck.thumbs import MAX_PX, MIN_PX, STEP, ThumbCache
 
-LABEL_H = 30
+LABEL_H = 30       # najmniejsza wysokość podpisu (jedna linia)
+LABEL_GAP = 3      # odstęp obrazka od podpisu
 PAD = 8
 GAP = 8            # stały odstęp między kaflami (piksele logiczne — skaluje się z DPI)
 SCROLLBAR_W = 14   # miejsce na pasek przewijania
+
+
+def label_font(base: QFont, tile_w: int) -> QFont:
+    """Czcionka podpisu — rośnie z kaflem, w granicach czytelności."""
+    f = QFont(base)
+    f.setPixelSize(max(9, min(15, int(tile_w * 0.11))))
+    return f
+
+
+def label_width(tile_w: int) -> int:
+    """Szerokość, w której zawija się podpis (komórka minus margines)."""
+    return max(1, tile_w + GAP - PAD)
+
+
+_LABEL_FLAGS = Qt.AlignHCenter | Qt.AlignTop | Qt.TextWordWrap
+
+
+def label_height(fm: QFontMetrics, text: str, width: int) -> int:
+    """Wysokość podpisu zawiniętego do `width` — całego, bez wielokropka."""
+    h = fm.boundingRect(QRect(0, 0, width, 10000), _LABEL_FLAGS, text or "").height()
+    return max(LABEL_H, LABEL_GAP + h + 6)
+
+
+def row_label_heights(names: list, cols: int, fm: QFontMetrics, width: int) -> list:
+    """Wysokość podpisu dla każdego WIERSZA siatki = najwyższy podpis w wierszu.
+
+    Cały wiersz ma jedną wysokość, więc obrazki i początki podpisów stoją na
+    wspólnej linii, a kolejny wiersz nie nachodzi na zawinięty tytuł.
+    """
+    cols = max(1, cols)
+    cache: dict = {}
+    out = []
+    for start in range(0, len(names), cols):
+        row = 0
+        for n in names[start:start + cols]:
+            if n not in cache:
+                cache[n] = label_height(fm, n, width)
+            row = max(row, cache[n])
+        out.append(row)
+    return out
 
 
 class TileModel(QAbstractListModel):
@@ -94,10 +135,19 @@ class TileDelegate(QStyledItemDelegate):
         self.tile_w = 128
         self.tile_h = 192
         self.show_labels = True
+        self.row_labels: list[int] = []   # wysokość podpisu per wiersz (liczy widok)
+        self.cols = 1
+
+    def label_h(self, row: int) -> int:
+        if not self.show_labels:
+            return 0
+        r = row // max(1, self.cols)
+        return self.row_labels[r] if 0 <= r < len(self.row_labels) else LABEL_H
 
     def sizeHint(self, option, index) -> QSize:
-        h = self.tile_h + (LABEL_H if self.show_labels else 0)
-        return QSize(self.tile_w + PAD, h + PAD)
+        # Z podpisami siatka nie ma stałego kroku — wysokość wiersza zależy od
+        # najdłuższego tytułu w nim, więc komórka ma dokładnie rozmiar kroku.
+        return QSize(self.tile_w + GAP, self.tile_h + GAP + self.label_h(index.row()))
 
     def paint(self, p: QPainter, option, index) -> None:
         p.save()
@@ -133,17 +183,17 @@ class TileDelegate(QStyledItemDelegate):
             p.drawRoundedRect(tile, 6, 6)
 
         if self.show_labels:
-            f = QFont(option.font)
-            f.setPixelSize(max(9, min(15, int(self.tile_w * 0.11))))
-            p.setFont(f)
-            fm = QFontMetrics(f)
-            text = fm.elidedText(index.data(Qt.DisplayRole) or "",
-                                 Qt.ElideRight, r.width() - PAD)
-            box = QRect(r.x(), tile.bottom() + 3, r.width(), LABEL_H - 6)
+            # Pełny tytuł zawinięty w wiersze — wysokość komórki policzył już
+            # widok (row_label_heights), więc tekst się mieści.
+            p.setFont(label_font(option.font, self.tile_w))
+            text = index.data(Qt.DisplayRole) or ""
+            w = label_width(self.tile_w)
+            box = QRect(r.x() + (r.width() - w) // 2, tile.bottom() + LABEL_GAP,
+                        w, max(1, r.bottom() - tile.bottom() - LABEL_GAP))
             p.setPen(QPen(QColor(12, 12, 14, 190), 3))   # obrys pod czytelność
-            p.drawText(box, Qt.AlignHCenter | Qt.AlignTop, text)
+            p.drawText(box, _LABEL_FLAGS, text)
             p.setPen(QColor(240, 240, 245))
-            p.drawText(box, Qt.AlignHCenter | Qt.AlignTop, text)
+            p.drawText(box, _LABEL_FLAGS, text)
         p.restore()
 
 
@@ -152,6 +202,7 @@ class TileView(QListView):
 
     zoom_ended = Signal()
     launched = Signal(object, QRect, QPixmap)   # pozycja i wygląd kafla do animacji
+    context_requested = Signal(object, QPoint)  # prawy klik: gra, pozycja globalna
 
     def __init__(self, cache: ThumbCache, parent=None) -> None:
         super().__init__(parent)
@@ -172,6 +223,8 @@ class TileView(QListView):
         self.viewport().setAutoFillBackground(False)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.doubleClicked.connect(self._launch)
+        self.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._context)
         self.setStyleSheet("""
             QListView { background: transparent; border: none; }
             QScrollBar:vertical { background: transparent; width: 10px; margin: 0; }
@@ -207,6 +260,7 @@ class TileView(QListView):
         self._repaint.setInterval(60)
         self._repaint.timeout.connect(self.viewport().update)
         cache.ready.connect(lambda *_: self._repaint.start())
+        self.model_.modelReset.connect(self._fit_columns)
 
     # ── rozmiar kafla ─────────────────────────────────────────────────────
     def set_tile(self, cols: int, ratio: float, show_labels: bool,
@@ -239,17 +293,45 @@ class TileView(QListView):
         tile_h = max(MIN_PX, int(round(tile_w * self.ratio)))
         return cols, tile_w, tile_h
 
+    def row_heights(self, width: int | None = None) -> list[int]:
+        """Wysokość kolejnych wierszy siatki (kafel + odstęp + podpis)."""
+        cols, tile_w, tile_h = self.metrics(width)
+        n = self.model_.rowCount()
+        if not self.delegate.show_labels:
+            return [tile_h + GAP] * (-(-n // cols))
+        names = [self.model_.item_at(i).name for i in range(n)]
+        fm = QFontMetrics(label_font(self.font(), tile_w))
+        return [tile_h + GAP + h
+                for h in row_label_heights(names, cols, fm, label_width(tile_w))]
+
     def _fit_columns(self) -> None:
         """Przelicza rozmiar kafla pod bieżącą szerokość widoku."""
-        _, tile_w, tile_h = self.metrics()
+        cols, tile_w, tile_h = self.metrics()
         labels = self.delegate.show_labels
         self.delegate.tile_w, self.delegate.tile_h = tile_w, tile_h
+        self.delegate.cols = cols
         self.model_.tile_w, self.model_.tile_h = tile_w, tile_h
         self.setIconSize(QSize(tile_w, tile_h))
-        # szerokość komórki liczona z tego samego wzoru co kolumny
-        grid = QSize(tile_w + GAP, tile_h + GAP + (LABEL_H if labels else 0))
-        if self.gridSize() != grid:
-            self.setGridSize(grid)
+        if labels:
+            # Bez stałej siatki: Qt układa komórki z sizeHint, a wiersz ma
+            # wysokość najdłuższego tytułu w nim.
+            rows = [h - tile_h - GAP for h in self.row_heights()]
+            changed = (rows != self.delegate.row_labels or self.gridSize().isValid()
+                       or self.uniformItemSizes())
+            self.delegate.row_labels = rows
+            if self.gridSize().isValid():
+                self.setGridSize(QSize())
+            self.setUniformItemSizes(False)
+            self.setSpacing(0)
+            if changed:
+                self.scheduleDelayedItemsLayout()
+        else:
+            self.delegate.row_labels = []
+            self.setUniformItemSizes(True)
+            # szerokość komórki liczona z tego samego wzoru co kolumny
+            grid = QSize(tile_w + GAP, tile_h + GAP)
+            if self.gridSize() != grid:
+                self.setGridSize(grid)
         # Reszta po podziale to najwyżej kilka pikseli — rozdzielamy ją równo na
         # boki, żeby siatka była wyśrodkowana, a nie dosunięta do lewej.
         cols, _, _ = self.metrics()
@@ -318,6 +400,12 @@ class TileView(QListView):
         ok, err = launcher.launch_item(it)
         if not ok:
             print(f"[deck] nie udało się uruchomić {it.name}: {err}", flush=True)
+
+    def _context(self, pos: QPoint) -> None:
+        idx = self.indexAt(pos)
+        item = self.model_.item_at(idx.row()) if idx.isValid() else None
+        if item is not None:
+            self.context_requested.emit(item, self.viewport().mapToGlobal(pos))
 
     def selected_items(self) -> list[Item]:
         rows = self.selectionModel().selectedIndexes()

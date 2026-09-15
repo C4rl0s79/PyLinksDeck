@@ -8,7 +8,7 @@ położenie wynikają z profilu ekranu, a jedyne, co się skaluje, to kafle.
 
 from __future__ import annotations
 
-from PySide6.QtCore import (QEasingCurve, QPropertyAnimation, QRect,
+from PySide6.QtCore import (QEasingCurve, QPoint, QPropertyAnimation, QRect,
                             QSize, Qt, Signal)
 from PySide6.QtGui import QColor, QFont, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
@@ -16,7 +16,7 @@ from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
 from deck.library import Item
 from deck.profiles import Group, clamp_cols
 from deck.thumbs import ASPECTS, ThumbCache
-from deck.ui.tiles import GAP, LABEL_H, TileView
+from deck.ui.tiles import GAP, TileView
 
 GRIP = 12          # wysokość strefy chwytania przy dolnej krawędzi
 OPEN_MS = 210      # rozwijanie — trochę wolniej, bo to ruch „do przodu"
@@ -31,6 +31,7 @@ class PanelWindow(QWidget):
     cols_changed = Signal(str, int)          # gid, nowa liczba kolumn
     height_changed = Signal(int)             # nowy zasięg panelu w px
     launched = Signal(object, QRect, QPixmap)  # gra uruchomiona z kafla
+    context_requested = Signal(object, QPoint)  # prawy klik na kaflu
 
     def __init__(self, cache: ThumbCache, parent=None) -> None:
         super().__init__(None, Qt.FramelessWindowHint | Qt.Tool
@@ -63,6 +64,7 @@ class PanelWindow(QWidget):
         self.view = TileView(cache, self)
         self.view.zoom_step = self._zoom_step          # skalowanie idzie do profilu
         self.view.launched.connect(self.launched)
+        self.view.context_requested.connect(self.context_requested)
 
         # Rozwijanie i zwijanie: animujemy geometrię okna, więc panel „wysuwa
         # się" spod docka zamiast pojawiać się skokiem.
@@ -157,10 +159,11 @@ class PanelWindow(QWidget):
             return 260
         # ta sama arytmetyka co układ siatki — inaczej panel byłby za wysoki
         # albo obcinał ostatni wiersz
-        cols, _, tile_h = self.view.metrics(width - 20)
-        cell_h = tile_h + GAP + (LABEL_H if self.show_labels else 0)
-        rows = max(1, -(-self.view.model_.rowCount() // cols))
-        return 34 + rows * cell_h + 24                # nagłówek + siatka + margines
+        rows = self.view.row_heights(width - 20)   # wiersze z zawiniętymi tytułami
+        if not rows:
+            _, _, tile_h = self.view.metrics(width - 20)
+            rows = [tile_h + GAP]
+        return 34 + sum(rows) + 24                    # nagłówek + siatka + margines
 
     def _zoom_step(self, step: int) -> None:
         """Kółko w górę = mniej kolumn, czyli większe kafle."""

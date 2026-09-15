@@ -49,23 +49,31 @@ def logo_root(pylinks_dir: Path | None = None) -> Path | None:
     return p if d and p.is_dir() else None
 
 def _is_dark(img: QImage) -> bool:
-    """Czy logotyp jest ciemny (czarne litery na przezroczystym tle).
+    """Czy logotyp jest ciemny i bezbarwny (czarne litery na przezroczystym tle).
 
     Katalog PyLinksWeb miesza wersje jasne i ciemne — ta druga na czarnym docku
     jest po prostu niewidoczna, więc dostaje jasny podkład. Liczymy średnią
-    jasność pikseli nieprzezroczystych na miniaturze, bo pełny obraz ma 1920 px.
+    jasność i nasycenie pikseli nieprzezroczystych na miniaturze, bo pełny obraz
+    ma 1920 px.
+
+    Sama jasność nie wystarcza: czerwień Nintendo ma luminancję ok. 90, granat
+    Game Boya 65, a oba są na ciemnym tle czytelne. Podkład dostaje więc tylko
+    logo szare lub czarne — to samo kryterium co kontrast grzbietu (spine.py).
     """
     small = img.scaled(28, 28, Qt.IgnoreAspectRatio, Qt.FastTransformation)
-    total = weight = 0.0
+    total = sat = weight = 0.0
     for y in range(small.height()):
         for x in range(small.width()):
             c = small.pixelColor(x, y)
             a = c.alphaF()
             if a < 0.25:
                 continue
-            total += a * (0.299 * c.red() + 0.587 * c.green() + 0.114 * c.blue())
+            r, g, b = c.red(), c.green(), c.blue()
+            hi, lo = max(r, g, b), min(r, g, b)
+            total += a * (0.299 * r + 0.587 * g + 0.114 * b)
+            sat += a * ((hi - lo) / hi if hi else 0.0)
             weight += a
-    return weight > 0 and (total / weight) < 96
+    return weight > 0 and (total / weight) < 96 and (sat / weight) < 0.30
 
 
 class LogoSet:

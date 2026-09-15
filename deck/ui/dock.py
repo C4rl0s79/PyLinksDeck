@@ -110,10 +110,12 @@ class DockBar(QWidget):
 
             logo = None
             if self.show_logos and g.platform:
-                logo = self.logos.fitted(g.logo or g.platform, r.width() - 16,
+                # Margines tylko 4 px z boku: logotypy bywają 8:1 (GBA), a przy
+                # kilkunastu zakładkach każdy piksel szerokości to wysokość logo.
+                logo = self.logos.fitted(g.logo or g.platform, r.width() - 8,
                                          int(self.height() * 0.62), dpr)
             lh = logo.height() / max(1.0, dpr) if logo is not None else 0
-            if logo is not None and lh >= 11:     # niżej logotyp jest nieczytelny
+            if logo is not None and lh >= 8:      # niżej logotyp jest nieczytelny
                 lw = logo.width() / max(1.0, dpr)
                 lx = int(r.center().x() - lw / 2)
                 ly = int(r.center().y() - lh / 2)

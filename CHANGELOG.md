@@ -3,6 +3,63 @@
 Format wg [Keep a Changelog](https://keepachangelog.com/pl/1.1.0/).
 Wersjonowanie semantyczne.
 
+## [0.6.1] — 2026-09-15
+
+### Naprawione
+- **Pełne tytuły pod kaflami.** Przy włączonych podpisach długi tytuł był ucinany
+  wielokropkiem po jednej linii. Teraz zawija się w tyle wierszy, ile potrzeba;
+  wiersz siatki ma wysokość najdłuższego tytułu w nim, więc obrazki i podpisy
+  stoją na wspólnej linii, a kolejny wiersz nie nachodzi na tekst. Wysokość
+  panelu dopasowuje się do zawiniętych podpisów. Bez podpisów siatka działa jak
+  dawniej.
+- **Automat przed portem w serii.** Port (np. Tekken na PS1) ma w PyLinksWeb datę
+  oryginału — tę samą co wersja arcade — więc kolejność zależała od nazwy. Remis
+  rozstrzyga teraz data wydania danej wersji: Tekken (MAME, 1994-12) stoi przed
+  Tekkenem na PS1 (1995-03).
+
+## [0.6.0] — 2026-09-15
+
+### Dodane
+- **Gry jednej serii stoją obok siebie, w kolejności.** Dane o seriach przychodzą
+  z PyLinksWeb (Ustawienia → „Rozpoznaj serie gier", IGDB). Seria zajmuje miejsce,
+  w którym alfabetycznie wypada JEJ nazwa (przedimek „The" pomijany), a w środku
+  gry układają się wg daty wydania — remake i port mają już datę oryginału.
+  Gry bez rozpoznanej serii układają się po nazwie, dokładnie jak wcześniej,
+  a brak danych z PyLinksWeb niczego nie zmienia.
+
+  Rozwiązuje przypadki, których nazwa nie oddaje: „Judgment" i „Like a Dragon"
+  nie odpływają pod J i L od reszty Yakuzy, a trylogia Legend of Heroes na PSP
+  staje w kolejności wydań, a nie amerykańskiej numeracji.
+
+- **Prawy klik na kaflu → „◀ Wcześniej w serii" / „▶ Później w serii".** IGDB zna
+  tylko daty, a kolejność fabularna bywa inna (Yakuza 0 przed Kiwami). Ręczne
+  ustawienie jest zapamiętywane w ustawieniach Decka; „Przywróć kolejność wg dat
+  wydania" je cofa. Nowa gra serii dołącza na końcu wg daty, a przestawienie
+  w zakładce jednej platformy nie gubi pozycji z innych platform.
+
+### Szczegóły
+- Klucz odtwarzany z nazwy pliku skrótu bywa inny niż w PyLinksWeb (dwukropek →
+  podkreślnik), więc obok dopasowania dokładnego jest indeks po znormalizowanej
+  nazwie — jak przy kadrach. Na skrótach użytkownika: 21 z 21 rozpoznanych.
+- `deck/series_order.py` + `tests/test_series_order.py` (11 testów na prawdziwych
+  datach z IGDB).
+
+## [0.5.1] — 2026-09-14
+
+### Naprawione
+- **Kolorowe logotypy dostawały w zakładkach białą podkładkę** (GB, NES, N64,
+  SNESMSU1, a także 32X, NSW, PS4, Neo Geo, Arcade). Podkładka jest dla logo
+  czarnych, niewidocznych na ciemnej belce, ale „ciemne" rozpoznawałem po samej
+  średniej jasności poniżej 96. Nasycona czerwień Nintendo ma jasność ok. 90,
+  a granat Game Boya 65, więc kolorowe logo brałem za czarne. SNES się wymykał,
+  bo jasne kółka przycisków podnoszą średnią do 119. Teraz podkładkę dostaje
+  tylko logo ciemne **i bezbarwne** (nasycenie < 0,30) — to samo kryterium, którego
+  od początku używają grzbiety na kaflach.
+- **Bardzo szerokie logotypy zamieniały się w napis** (GBA 8,6:1). Przy 19
+  zakładkach na ekranie 2048 px logo GBA po wpasowaniu miało 10,4 px wysokości,
+  a próg czytelności wynosił 11 px, więc zakładka pokazywała tekst „GBA". Margines
+  logo w zakładce zmniejszony z 16 do 8 px, a próg z 11 do 8 px.
+
 ## [0.5.0] — 2026-08-30
 
 ### Naprawione

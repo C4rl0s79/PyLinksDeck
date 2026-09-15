@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (QApplication, QFileDialog, QInputDialog, QMenu,
 
 from deck import (autostart, library, logos as L, paths as P,
                   profiles as PR, spine as SP, winshell)
+from deck import series_order as SO
 from deck import thumbs as TH
 from deck.thumbs import ThumbCache
 from deck.ui.dock import DockBar
@@ -81,6 +82,7 @@ class DeckApp:
         self.panel.cols_changed.connect(self._on_cols_changed)
         self.panel.height_changed.connect(self._on_panel_resized)
         self.panel.launched.connect(self._on_launched)
+        self.panel.context_requested.connect(self._tile_menu)
         self._flash = None          # referencja, żeby okno efektu przeżyło
 
         self._hide_timer = QTimer()
@@ -265,8 +267,12 @@ class DeckApp:
         scr = self._screen()
         dpr = float(scr.devicePixelRatio()) if scr else 1.0
         picked = [it for it in self.items if g.matches(it)]
-        picked.sort(key=lambda i: (i.platform, i.sort_name) if g.sort == "platform"
-                    else (i.sort_name,))
+        if g.sort == "platform":
+            picked.sort(key=lambda i: (i.platform, i.sort_name))
+        else:
+            # Gry jednej serii obok siebie (dane z PyLinksWeb). Gry bez
+            # rozpoznanej serii układają się po nazwie dokładnie jak wcześniej.
+            picked.sort(key=SO.make_sort_key(self.cfg.series_order))
         self.panel.set_scroll_speed(self.cfg.scroll_speed)
         self.panel.set_group(g, picked, dpr, self.cfg.show_labels, self.spine_for(g))
         self._fit_panel()
@@ -351,6 +357,38 @@ class DeckApp:
         for w in (self.dock, self.panel):
             if w.isVisible() and winshell.is_below_desktop(int(w.winId())):
                 self._pin(w)
+
+    # ── kolejność w serii ─────────────────────────────────────────────────
+    def _tile_menu(self, item, pos: QPoint) -> None:
+        m = QMenu()
+        fr = getattr(item, "franchise", "") or ""
+        if fr:
+            m.addAction(f"Seria: {fr}").setEnabled(False)
+            m.addAction("◀  Wcześniej w serii", lambda: self._series_move(item, -1))
+            m.addAction("▶  Później w serii", lambda: self._series_move(item, +1))
+            if fr in self.cfg.series_order:
+                m.addSeparator()
+                m.addAction("Przywróć kolejność wg dat wydania",
+                            lambda: self._series_reset(fr))
+        else:
+            m.addAction("Gra poza rozpoznaną serią").setEnabled(False)
+            m.addAction("(PyLinksWeb → Ustawienia → Rozpoznaj serie gier)").setEnabled(False)
+        m.exec(pos)
+
+    def _series_move(self, item, delta: int) -> None:
+        g = self.cfg.active()
+        if g is None:
+            return
+        widoczne = [it for it in self.items if g.matches(it)]
+        self.cfg.series_order = SO.move_in_series(widoczne, item, delta,
+                                                  self.cfg.series_order)
+        self._save_soon()
+        self._refresh_panel()
+
+    def _series_reset(self, franchise: str) -> None:
+        self.cfg.series_order = SO.reset_series(self.cfg.series_order, franchise)
+        self._save_soon()
+        self._refresh_panel()
 
     # ── zapis ─────────────────────────────────────────────────────────────
     def _save_soon(self) -> None:

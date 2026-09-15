@@ -87,6 +87,9 @@ class Settings:
     auto_hide: bool = True
     opacity: float = 0.96
     screens: dict[str, ScreenLayout] = field(default_factory=dict)
+    # ręczna kolejność gier w serii: {nazwa serii: [klucze gier]} — tam, gdzie
+    # data wydania nie oddaje kolejności fabularnej (Yakuza 0 przed Kiwami)
+    series_order: dict[str, list[str]] = field(default_factory=dict)
 
     # ── zakładki ──────────────────────────────────────────────────────────
     def visible_groups(self) -> list[Group]:

@@ -57,6 +57,9 @@ class Item:
     fit: str = "pad"
     offset: float = 0.5
     collections: list[str] = field(default_factory=list)
+    franchise: str = ""        # seria z PyLinksWeb (IGDB); pusta = gra luźna
+    order_ts: int = 0          # data do układania w serii (remake = oryginał)
+    release_ts: int = 0        # data wydania TEJ wersji — rozstrzyga remisy
 
     @property
     def sort_name(self) -> str:
@@ -269,6 +272,46 @@ def _mame_set(args: str) -> str:
     return toks[-1].lower() if toks else ""
 
 
+class _Series:
+    """Serie gier rozpoznane przez PyLinksWeb (tabela `game_series`).
+
+    Jak przy kadrach: klucz odtworzony z nazwy pliku skrótu bywa inny niż
+    oryginalny (dwukropek w tytule staje się podkreślnikiem), więc obok
+    dopasowania dokładnego trzymamy indeks (platforma, znormalizowana nazwa).
+    Brak tabeli — np. seria jeszcze nierozpoznana — nie może niczego wywalić.
+    """
+
+    def __init__(self, con: sqlite3.Connection | None) -> None:
+        self.exact: dict[str, tuple[str, int, int]] = {}
+        self.by_name: dict[tuple[str, str], tuple[str, int, int]] = {}
+        if con is None:
+            return
+        try:
+            rows = con.execute(
+                "SELECT key, name, COALESCE(franchise, collection), order_ts, release_ts "
+                "FROM game_series WHERE COALESCE(franchise, collection) IS NOT NULL"
+            ).fetchall()
+        except sqlite3.Error:
+            return                      # PyLinksWeb nie rozpoznawał jeszcze serii
+        for key, name, fr, ts, rel in rows:
+            val = (fr or "", int(ts or 0), int(rel or 0))
+            self.exact[key] = val
+            self.by_name[(self._plat(key), norm(name))] = val
+
+    @staticmethod
+    def _plat(key: str) -> str:
+        if key.startswith("rom::"):
+            return key.split("::")[1].upper()
+        if key.startswith("mame::"):
+            return "MAME"
+        return "PC"
+
+    def get(self, key: str, platform: str, name: str) -> tuple[str, int, int]:
+        return (self.exact.get(key)
+                or self.by_name.get((platform.upper(), norm(name)))
+                or ("", 0, 0))
+
+
 def _key_for(platform: str, name: str, target: str, args: str) -> str:
     """Odtwarza klucz PyLinksWeb na podstawie tego, co widać w skrócie."""
     m = _STEAM_ID.search(f"{target} {args}")
@@ -295,6 +338,7 @@ def load(base: Path | None = None) -> list[Item]:
     try:
         crops = _Crops(con, fit_default)
         parents = _mame_parents(con)
+        series = _Series(con)
     finally:
         if con is not None:
             con.close()
@@ -316,12 +360,14 @@ def load(base: Path | None = None) -> list[Item]:
             key = _key_for(platform, name, target, args)
             parent = parents.get(_mame_set(args), "") if platform.upper() == "MAME" else ""
             fit, off = crops.get(key, platform, name)
+            franchise, order_ts, release_ts = series.get(key, platform, name)
             items.append(Item(
                 key=key, name=name, platform=platform, lnk=lnk,
                 target=target, args=args, workdir=cwd,
                 cover=covers.find(key, platform, name, parent),
                 fit=fit, offset=off,
                 collections=colls.get(f"{platform.upper()}\x00{norm(name)}", []),
+                franchise=franchise, order_ts=order_ts, release_ts=release_ts,
             ))
     reader.flush()
     return items
