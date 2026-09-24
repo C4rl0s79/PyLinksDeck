@@ -67,6 +67,7 @@ class DeckApp:
         self.items: list[library.Item] = []
         self.cfg = PR.load() or PR.Settings()
         self.sig, self.sig_label = "", ""
+        self._screen_state = None       # ostatnio zastosowany stan ekranu
 
         self.logos = L.LogoSet(self.base)
         self._apply_spine_settings()
@@ -108,12 +109,11 @@ class DeckApp:
         self._guard.start()
 
         app = QGuiApplication.instance()
-        app.screenAdded.connect(lambda *_: self._screen_timer.start())
+        app.screenAdded.connect(self._on_screen_added)
         app.screenRemoved.connect(lambda *_: self._screen_timer.start())
         app.primaryScreenChanged.connect(lambda *_: self._screen_timer.start())
         for s in app.screens():
-            s.geometryChanged.connect(lambda *_: self._screen_timer.start())
-            s.logicalDotsPerInchChanged.connect(lambda *_: self._screen_timer.start())
+            self._watch_screen(s)
 
         autostart.refresh_if_enabled()
         self._build_tray()
@@ -207,6 +207,36 @@ class DeckApp:
     def _screen(self):
         return QGuiApplication.primaryScreen()      # Deck żyje na ekranie głównym
 
+    def _watch_screen(self, s) -> None:
+        s.geometryChanged.connect(lambda *_: self._screen_timer.start())
+        s.logicalDotsPerInchChanged.connect(lambda *_: self._screen_timer.start())
+
+    def _on_screen_added(self, s) -> None:
+        """Monitor podłączony w trakcie działania też musi być obserwowany —
+        wcześniej sygnały podpinałem raz, przy starcie."""
+        self._watch_screen(s)
+        self._screen_timer.start()
+
+    def _screen_now(self):
+        """Stan ekranu głównego: klucz profilu i obszar roboczy."""
+        app = QGuiApplication.instance()
+        scr = self._screen()
+        if scr is None:
+            return None
+        sig, label = PR.signature(app.screens(), scr)
+        ar = scr.availableGeometry()
+        return (sig, label, ar.x(), ar.y(), ar.width(), ar.height(),
+                round(float(scr.devicePixelRatio()), 3))
+
+    def _check_screen(self) -> None:
+        """Przepięcie ekranu potrafi nie dać żadnego sygnału (przełączenie
+        „tylko ekran 1/2", zmiana ekranu głównego) albo dać go, zanim Windows
+        poda nowe wymiary. Dlatego stan ekranu sprawdzamy też cyklicznie —
+        inaczej dock zostawał rozmiarem poprzedniego ekranu."""
+        state = self._screen_now()
+        if state is not None and state != self._screen_state:
+            self._apply_screen()
+
     @property
     def layout(self) -> PR.ScreenLayout:
         return self.cfg.layout(self.sig, self.sig_label)
@@ -218,7 +248,8 @@ class DeckApp:
         zmienić tylko to, ile miejsca zajmuje dock i panel.
         """
         app = QGuiApplication.instance()
-        self.sig, self.sig_label = PR.signature(app.screens())
+        self._screen_state = self._screen_now()
+        self.sig, self.sig_label = PR.signature(app.screens(), self._screen())
         self.logos.set_style(self.cfg.logo_style)
         self._layout_windows()
         self.dock.set_show_logos(self.cfg.show_logos)
@@ -234,6 +265,13 @@ class DeckApp:
         if scr is None:
             return
         lay = self.layout
+        # Okno musi należeć do ekranu głównego, zanim nadamy mu wymiary: przy
+        # dwóch monitorach o różnym skalowaniu Qt przelicza geometrię wg ekranu,
+        # na którym okno aktualnie stoi, i dock wychodził w skali poprzedniego.
+        for w in (self.dock, self.panel):
+            wh = w.windowHandle()
+            if wh is not None and wh.screen() is not scr:
+                wh.setScreen(scr)
         ar = scr.availableGeometry()
         dw = max(240, int(ar.width() * lay.dock_width))
         dh = max(28, int(lay.dock_height))
@@ -352,6 +390,7 @@ class DeckApp:
         winshell.pin_above_desktop(hwnd)
 
     def _guard_layer(self) -> None:
+        self._check_screen()
         if self.settings.get("always_on_top", False):
             return
         for w in (self.dock, self.panel):

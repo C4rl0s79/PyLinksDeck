@@ -3,6 +3,32 @@
 Format wg [Keep a Changelog](https://keepachangelog.com/pl/1.1.0/).
 Wersjonowanie semantyczne.
 
+## [0.6.2] — 2026-09-23
+
+### Naprawione
+- **Ustawienia docka gubiły się przy przełączaniu ekranów.** Klucz profilu
+  liczyłem z nazwy monitora (`QScreen.name()`), a Windows nadaje ją zależnie od
+  tego, które ekrany są włączone i który jest główny. Laptop bywał raz jednym,
+  raz drugim urządzeniem, więc przy każdym przełączeniu „tylko ekran 1/2" albo
+  zmianie ekranu głównego powstawał **nowy, pusty profil** — stąd wrażenie, że
+  ustawienia się nie zapisują. W pliku było 29 profili na 8 realnych ekranów,
+  w tym sześć wpisów samego laptopa.
+- **Profil zależy teraz wyłącznie od ekranu, na którym Deck stoi** — jego
+  rozmiaru i skalowania (klucz `2048x1280@1.25`, czytelny zamiast skrótu).
+  Podłączenie drugiego monitora nie zmienia już wymiarów docka, bo dock i panel
+  dzielą szerokość ekranu głównego i nic więcej ich nie obchodzi.
+- **Stare profile są scalane, nie kasowane:** wpisy tego samego ekranu łączą się
+  w jeden, wygrywa ten ze zmienionymi ustawieniami (29 → 8 u mnie w teście).
+  Przed migracją powstaje kopia `layouts.json.pre-v4-backup`.
+- **Dock zostawał w rozmiarze poprzedniego ekranu.** Przy zmianie ekranu
+  głównego Qt nie zawsze wysyła sygnał, a gdy wysyła, Windows bywa jeszcze przy
+  starych wymiarach — dock 2048 px logicznych z laptopa lądował na monitorze
+  3840 px i zajmował dwie trzecie szerokości, choć w menu stało „cała szerokość".
+  Stan ekranu jest teraz sprawdzany cyklicznie (co 3 s, razem ze strażnikiem
+  warstwy), monitory podłączone w trakcie działania są obserwowane tak samo jak
+  te obecne przy starcie, a okna są przypisywane do ekranu głównego **przed**
+  nadaniem wymiarów, żeby Qt nie przeliczał ich w skali poprzedniego monitora.
+
 ## [0.6.1] — 2026-09-15
 
 ### Naprawione

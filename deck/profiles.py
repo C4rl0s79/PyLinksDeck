@@ -17,14 +17,14 @@ jest niezmiennikiem układu.
 
 from __future__ import annotations
 
-import hashlib
 import json
+import re
 from dataclasses import asdict, dataclass, field, fields
 from typing import Iterable
 
 from deck import paths as P
 
-SCHEMA = 3
+SCHEMA = 4
 MIN_COLS = 1
 MAX_COLS = 24
 
@@ -106,6 +106,8 @@ class Settings:
 
     # ── wymiary bieżącego ekranu ──────────────────────────────────────────
     def layout(self, sig: str, label: str = "") -> ScreenLayout:
+        if not sig:                      # przed rozpoznaniem ekranu — wartości
+            return ScreenLayout()        # tymczasowe, nie zapisujemy pustego klucza
         lay = self.screens.get(sig)
         if lay is None:
             lay = ScreenLayout(label=label)
@@ -134,18 +136,64 @@ class Settings:
         return Settings(groups=groups, screens=screens, **kwargs)
 
 
-# ── sygnatura zestawu monitorów ────────────────────────────────────────────
-def signature(screens: Iterable) -> tuple[str, str]:
-    """(sygnatura, czytelna etykieta) dla aktualnie podłączonych ekranów."""
-    parts, labels = [], []
-    for s in sorted(screens, key=lambda s: (s.name(), s.geometry().x())):
-        g = s.geometry()
-        dpr = round(float(s.devicePixelRatio()), 2)
-        parts.append(f"{s.name()}|{g.width()}x{g.height()}@{dpr}")
-        labels.append(f"{g.width()}×{g.height()}"
-                      + (f" ×{dpr:g}" if abs(dpr - 1.0) > 0.01 else ""))
-    sig = hashlib.sha1("||".join(parts).encode()).hexdigest()[:12] if parts else "none"
-    return sig, " + ".join(labels)
+# ── sygnatura ekranu ───────────────────────────────────────────────────────
+def screen_key(screen) -> tuple[str, str]:
+    """(klucz, czytelna etykieta) dla JEDNEGO ekranu — rozmiar i skalowanie.
+
+    Liczy się wyłącznie ekran, na którym Deck stoi (główny): to jego szerokość
+    dzieli dock i panel. Nazwa monitora do klucza NIE wchodzi — Windows nadaje
+    ją zależnie od tego, które ekrany są w danej chwili włączone i który jest
+    główny, więc ten sam laptop bywał raz jednym, raz drugim urządzeniem i
+    dostawał za każdym razem nowy, pusty profil.
+    """
+    g = screen.geometry()
+    dpr = round(float(screen.devicePixelRatio()), 2)
+    key = f"{g.width()}x{g.height()}@{dpr:g}"
+    label = f"{g.width()}×{g.height()}" + (f" ×{dpr:g}" if abs(dpr - 1.0) > 0.01 else "")
+    return key, label
+
+
+def signature(screens: Iterable, primary=None) -> tuple[str, str]:
+    """(klucz, etykieta) dla bieżącego ustawienia — wg ekranu głównego."""
+    scr = primary
+    if scr is None:
+        scr = next(iter(screens), None)
+    if scr is None:
+        return "none", ""
+    return screen_key(scr)
+
+
+def _key_from_label(label: str) -> str:
+    """Klucz ekranu odtworzony z etykiety starego profilu („2048×1280 ×1.25")."""
+    text = str(label or "").strip()
+    if not text or "+" in text:          # profil wielu ekranów — nie wiadomo,
+        return ""                        # który był główny, nie ma czego przenosić
+    m = re.match(r"^(\d+)×(\d+)(?:\s*×([\d.,]+))?$", text)
+    if not m:
+        return ""
+    dpr = float((m.group(3) or "1").replace(",", "."))
+    return f"{m.group(1)}x{m.group(2)}@{round(dpr, 2):g}"
+
+
+def _merge_screens(entries: Iterable) -> dict:
+    """Stare profile (klucz = hash z nazwą monitora) na klucze wg rozmiaru.
+
+    Ten sam ekran miewał po kilka wpisów. Zostawiamy ten, w którym użytkownik
+    coś zmienił — domyślne wartości nic nie wnoszą — a przy kilku zmienionych
+    ten wpisany najpóźniej.
+    """
+    base = ScreenLayout()
+    out: dict = {}
+    for lay in entries:
+        key = _key_from_label(lay.label)
+        if not key:
+            continue
+        touched = any(getattr(lay, f.name) != getattr(base, f.name)
+                      for f in fields(ScreenLayout) if f.name != "label")
+        old = out.get(key)
+        if old is None or touched:
+            out[key] = lay
+    return out
 
 
 def clamp_cols(value: int) -> int:
@@ -207,15 +255,17 @@ def _from_schema2(raw: dict) -> Settings | None:
         auto_hide=bool(best.get("auto_hide", True)),
         opacity=float(best.get("opacity", 0.96)),
     )
+    olds = []
     for sig, prof in profiles.items():
-        s.screens[sig] = ScreenLayout(
+        olds.append(ScreenLayout(
             label=prof.get("label", ""),
             dock_width=float(prof.get("dock_width", 0.86)),
             dock_height=int(prof.get("dock_height", 46)),
             dock_offset=int(prof.get("dock_offset", 0)),
             panel_width=float(prof.get("panel_width", 0.94)),
             panel_height=float(prof.get("panel_height", 0.80)),
-        )
+        ))
+    s.screens = _merge_screens(olds)
     return s
 
 
@@ -227,15 +277,38 @@ def load() -> Settings | None:
     schema = int(raw.get("schema", 0))
     if schema == SCHEMA:
         try:
-            return Settings.from_json(raw.get("settings") or {})
+            cfg = Settings.from_json(raw.get("settings") or {})
         except Exception:
             return None
+        cfg.screens.pop("", None)        # ślad po starym, pustym kluczu
+        return cfg
+    if schema < SCHEMA:
+        _backup(schema)
+    if schema == 3:
+        try:
+            cfg = Settings.from_json(raw.get("settings") or {})
+        except Exception:
+            return None
+        cfg.screens = _merge_screens(cfg.screens.values())
+        return cfg
     if schema == 2:
         try:
             return _from_schema2(raw)
         except Exception:
             return None
     return None
+
+
+def _backup(schema: int) -> None:
+    """Kopia pliku przed migracją — z konfiguracją zbieraną miesiącami nie ma
+    żartów, a migracja zmienia klucze ekranów nieodwracalnie."""
+    src = P.layouts_path()
+    dst = src.with_name(src.name + f".pre-v{schema + 1}-backup")
+    try:
+        if not dst.exists():
+            dst.write_bytes(src.read_bytes())
+    except OSError:
+        pass
 
 
 def save(settings: Settings) -> None:
