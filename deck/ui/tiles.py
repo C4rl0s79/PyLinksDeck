@@ -149,6 +149,10 @@ class TileDelegate(QStyledItemDelegate):
         # najdłuższego tytułu w nim, więc komórka ma dokładnie rozmiar kroku.
         return QSize(self.tile_w + GAP, self.tile_h + GAP + self.label_h(index.row()))
 
+    @staticmethod
+    def _znacznik_sk(p: QPainter, tile: QRect) -> None:
+        _znacznik_sk(p, tile)
+
     def paint(self, p: QPainter, option, index) -> None:
         p.save()
         p.setRenderHint(QPainter.Antialiasing, True)
@@ -182,6 +186,10 @@ class TileDelegate(QStyledItemDelegate):
             p.setPen(Qt.NoPen)
             p.drawRoundedRect(tile, 6, 6)
 
+        it = index.data(Qt.UserRole)
+        if getattr(it, "special_k", False):
+            self._znacznik_sk(p, tile)
+
         if self.show_labels:
             # Pełny tytuł zawinięty w wiersze — wysokość komórki policzył już
             # widok (row_label_heights), więc tekst się mieści.
@@ -195,6 +203,20 @@ class TileDelegate(QStyledItemDelegate):
             p.setPen(QColor(240, 240, 245))
             p.drawText(box, _LABEL_FLAGS, text)
         p.restore()
+
+
+def _znacznik_sk(p: QPainter, tile: QRect) -> None:
+    """⚡ w rogu kafla — gra uruchamiana przez Special K."""
+    bok = max(16, min(28, tile.width() // 7))
+    pole = QRect(tile.right() - bok - 4, tile.y() + 4, bok, bok)
+    p.setBrush(QColor(180, 83, 9, 235))          # bursztyn jak w PyLinksWeb
+    p.setPen(QPen(QColor(245, 158, 11), 1))
+    p.drawRoundedRect(pole, 5, 5)
+    f = QFont(p.font())
+    f.setPixelSize(max(10, int(bok * 0.7)))
+    p.setFont(f)
+    p.setPen(QColor(255, 247, 237))
+    p.drawText(pole, Qt.AlignCenter, "\u26a1")
 
 
 class TileView(QListView):
