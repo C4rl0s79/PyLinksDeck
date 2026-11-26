@@ -22,8 +22,12 @@ from pathlib import Path
 
 from deck import paths as P
 
-# Steam eksportuje skróty w dwóch wariantach: protokołem i przez -applaunch.
-_STEAM_ID = re.compile(r"steam://rungameid/(\d+)|-applaunch\s+(\d+)", re.I)
+# Skrót do gry ze Steama ma jeden z trzech kształtów: protokół, `-applaunch`
+# albo — gdy PyLinksWeb przełączy platformę PC na Special K — uruchomienie
+# SKIF-a z `SKIF_SteamAppId=<appid>`. Bez tego trzeciego wariantu gry ze Steama
+# gubiły klucz (a z nim okładki) zaraz po przełączeniu na Special K.
+_STEAM_ID = re.compile(
+    r"steam://rungameid/(\d+)|-applaunch\s+(\d+)|SKIF_SteamAppId=(\d+)", re.I)
 _SAFE = re.compile(r"[^A-Za-z0-9._-]+")
 _NORM = re.compile(r"[^a-z0-9]+")
 
@@ -66,6 +70,11 @@ class Item:
         return norm(self.name)
 
     @property
+    def special_k(self) -> bool:
+        """Czy skrót uruchamia grę przez Special K (SKIF)."""
+        return is_specialk(self.target, self.args)
+
+    @property
     def is_rom(self) -> bool:
         """Grzbiet platformy PyLinksWeb dokłada wyłącznie ROM-om (export.py:309)."""
         return self.key.startswith("rom::")
@@ -99,17 +108,23 @@ class _ShortcutReader:
         except OSError:
             return "", "", ""
         hit = self._cache.get(str(lnk))
-        if hit and hit.get("stamp") == stamp:
+        # wpis sprzed 0.6.5 nie ma pola "icon" — czytamy taki skrót jeszcze raz
+        if hit and hit.get("stamp") == stamp and "icon" in hit:
             return hit.get("target", ""), hit.get("args", ""), hit.get("cwd", "")
         try:
             sc = self._com().CreateShortCut(str(lnk))
             rec = {"stamp": stamp, "target": sc.TargetPath or "",
-                   "args": sc.Arguments or "", "cwd": sc.WorkingDirectory or ""}
+                   "args": sc.Arguments or "", "cwd": sc.WorkingDirectory or "",
+                   "icon": sc.IconLocation or ""}
         except Exception:
-            rec = {"stamp": stamp, "target": "", "args": "", "cwd": ""}
+            rec = {"stamp": stamp, "target": "", "args": "", "cwd": "", "icon": ""}
         self._cache[str(lnk)] = rec
         self._dirty = True
         return rec["target"], rec["args"], rec["cwd"]
+
+    def icon(self, lnk: Path) -> str:
+        """IconLocation skrótu (po `read()`, z tego samego wpisu cache)."""
+        return (self._cache.get(str(lnk)) or {}).get("icon", "")
 
     def flush(self) -> None:
         if not self._dirty:
@@ -312,11 +327,22 @@ class _Series:
                 or ("", 0, 0))
 
 
+def is_specialk(target: str, args: str) -> bool:
+    """Skrót przez Special K: celuje w SKIF-a albo niesie jego parametr.
+
+    PyLinksWeb potrafi przełączyć platformę PC na uruchamianie przez Special K
+    (`SKIF.exe "<plik gry>" SKIF_SteamAppId=<appid>`). W Decku warto to WIDZIEĆ:
+    w grach sieciowych Special K bywa niewskazany (anty-cheat), więc kafelek
+    pokazuje ⚡ i od razu wiadomo, która gra idzie przez wstrzykiwanie."""
+    stem = Path(target or "").stem.lower()
+    return stem.startswith("skif") or "skif_steamappid=" in (args or "").lower()
+
+
 def _key_for(platform: str, name: str, target: str, args: str) -> str:
     """Odtwarza klucz PyLinksWeb na podstawie tego, co widać w skrócie."""
     m = _STEAM_ID.search(f"{target} {args}")
     if m:
-        return f"steam::app::{m.group(1) or m.group(2)}"
+        return f"steam::app::{m.group(1) or m.group(2) or m.group(3)}"
     if platform.upper() == "MAME":
         st = _mame_set(args)
         if st:
@@ -324,6 +350,39 @@ def _key_for(platform: str, name: str, target: str, args: str) -> str:
     if platform.upper() == "PC":
         return f"extra::name::{name.strip().lower()}"
     return f"rom::{platform.lower()}::{name.strip().lower()}"
+
+
+_ICO_HASH = re.compile(r"_[0-9a-f]{10}$")
+
+
+def _known_keys(con: sqlite3.Connection | None) -> dict[str, str]:
+    """safe_key → klucz PyLinksWeb, dla gier, o których baza coś wie."""
+    out: dict[str, str] = {}
+    if con is None:
+        return out
+    for sql in ("SELECT key FROM choices", "SELECT key FROM crops",
+                "SELECT key FROM game_series"):
+        try:
+            for (k,) in con.execute(sql):
+                if k:
+                    out.setdefault(safe_key(str(k)), str(k))
+        except sqlite3.Error:
+            pass                         # tabela może jeszcze nie istnieć
+    return out
+
+
+def _icon_stem(icon_location: str) -> str:
+    """`…\\gog_gog_1423049311_cd4feb3d61.ico,0` → `gog_gog_1423049311`.
+
+    PyLinksWeb zapisuje ikonę skrótu jako `<safe_key(klucz)>_<md5[:10]>.ico`
+    (export.write_cache_ico), więc nazwa ikony niesie klucz gry. To jedyne
+    miejsce w skrócie, z którego da się odczytać klucz GOG (`gog::gog::<id>`)
+    — ani nazwa, ani cel skrótu go nie zawierają.
+    """
+    path = (icon_location or "").rsplit(",", 1)[0].strip().strip('"')
+    if not path:
+        return ""
+    return _ICO_HASH.sub("", Path(path).stem)
 
 
 def load(base: Path | None = None) -> list[Item]:
@@ -339,6 +398,7 @@ def load(base: Path | None = None) -> list[Item]:
         crops = _Crops(con, fit_default)
         parents = _mame_parents(con)
         series = _Series(con)
+        known = _known_keys(con)
     finally:
         if con is not None:
             con.close()
@@ -358,13 +418,21 @@ def load(base: Path | None = None) -> list[Item]:
             name = lnk.stem.strip()
             target, args, cwd = reader.read(lnk)
             key = _key_for(platform, name, target, args)
+            # Klucz do GRAFIKI (okładka, kadr, seria): z nazwy ikony, gdy baza
+            # PyLinksWeb go zna — tylko tak trafiają gry GOG. `key` (tożsamość
+            # w grupach i kolejności serii) zostaje bez zmian.
+            stem = _icon_stem(reader.icon(lnk))
+            art_key = known.get(stem, key)
             parent = parents.get(_mame_set(args), "") if platform.upper() == "MAME" else ""
-            fit, off = crops.get(key, platform, name)
-            franchise, order_ts, release_ts = series.get(key, platform, name)
+            fit, off = crops.get(art_key, platform, name)
+            franchise, order_ts, release_ts = series.get(art_key, platform, name)
             items.append(Item(
                 key=key, name=name, platform=platform, lnk=lnk,
                 target=target, args=args, workdir=cwd,
-                cover=covers.find(key, platform, name, parent),
+                # ikona została upieczona z okładki o tej samej nazwie — to
+                # najpewniejsze dopasowanie; potem klucz z bazy, potem zgadywanie
+                cover=(covers.exact.get(stem) if stem else None)
+                      or covers.find(art_key, platform, name, parent),
                 fit=fit, offset=off,
                 collections=colls.get(f"{platform.upper()}\x00{norm(name)}", []),
                 franchise=franchise, order_ts=order_ts, release_ts=release_ts,

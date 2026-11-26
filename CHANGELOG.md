@@ -3,6 +3,54 @@
 Format wg [Keep a Changelog](https://keepachangelog.com/pl/1.1.0/).
 Wersjonowanie semantyczne.
 
+## [0.6.5] — 2026-11-26
+
+### Naprawione
+- **Gry GOG bez okładek na kafelkach** (same inicjały). Deck bierze teraz klucz
+  okładki z ikony skrótu, którą PyLinksWeb nazywa kluczem gry. Tożsamość gry
+  w grupach i kolejności serii bez zmian, więc nic nie wypada z grup.
+  W bibliotece użytkownika: bez okładki było 24 z 633 kafli, jest 1 (CX4 —
+  chip SNES, nie gra). Dragon Lore i Flashback (GOG) pokazywały okładkę wersji
+  na 3DO — teraz właściwą. `lnk_cache.json` doczytuje skróty raz, po
+  aktualizacji (dochodzi pole ikony).
+
+### Plan: gry GOG (i Epic) bez okładek na kafelkach
+Objaw: kafle Cyberpunk 2077, Dagon, Dark Deity, DOOM II, Final Doom… pokazują
+same inicjały, choć okładki są w `Cache\covers\icon` (`gog_gog_<id>.*`).
+Przyczyna: `_key_for()` odtwarza klucz z tego, co widać w skrócie — dla gry PC
+bez Steam ID zgaduje `extra::name::<tytuł>`. Gry GOG mają w PyLinksWeb klucz
+`gog::gog::<id>`, którego nie da się odczytać z nazwy ani celu skrótu.
+Co się zmienia: Deck czyta też `IconLocation` skrótu. Ikonę PyLinksWeb zapisuje
+jako `<safe_key(klucz)>_<hash>.ico`, więc z nazwy ikony wynika klucz; prawdziwy
+klucz bierzemy z bazy PyLinksWeb (tabele choices/crops/game_series) i używamy
+go do okładki, kadru i serii. Dotychczasowe zgadywanie zostaje jako zapas.
+Czego NIE dotyka: uruchamianie gier, układy/profile, rysowanie kafli, ROM-y
+i MAME (ich klucze już trafiały).
+
+## [0.6.4] — 2026-10-07
+
+### Dodane
+- **Znacznik ⚡ na kafelku gry uruchamianej przez Special K.** PyLinksWeb potrafi
+  przełączyć platformę PC na uruchamianie przez SKIF-a, a w grach sieciowych
+  Special K bywa niewskazany (anty-cheat) — teraz od razu widać, która gra idzie
+  przez wstrzykiwanie. Rozpoznanie po skrócie: cel `SKIF.exe` albo parametr
+  `SKIF_SteamAppId=`, więc działa też dla gier spoza Steama. W bibliotece
+  użytkownika: 78 z 80 gier PC.
+
+## [0.6.3] — 2026-10-06
+
+### Naprawione
+- **Gry ze Steama traciły okładki po przełączeniu PyLinksWeb na Special K.**
+  Deck rozpoznaje grę po tym, co uruchamia jej skrót, i znał dwa zapisy:
+  `steam://rungameid/<appid>` oraz `-applaunch <appid>`. Skrót przez Special K
+  ma trzeci: `SKIF.exe "<plik gry>" SKIF_SteamAppId=<appid>`. Bez niego gra ze
+  Steama dostawała klucz liczony z nazwy, więc nie trafiała w swoją okładkę
+  i kafelek pokazywał same inicjały. Gry spoza Steama (klucz z nazwy) działały
+  cały czas — stąd mieszanka kafelków z grafiką i bez.
+
+  Po poprawce: 79 z 80 gier PC w bibliotece użytkownika ma okładkę (jedyny
+  wyjątek to gra, która nigdy jej nie miała). ROM-y i arcade bez zmian.
+
 ## [0.6.2] — 2026-09-23
 
 ### Naprawione
